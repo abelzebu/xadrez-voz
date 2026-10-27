@@ -1,0 +1,13 @@
+{
+  "name": "Xadrez por Voz",
+  "short_name": "Xadrez Voz",
+  "start_url": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#161915",
+  "theme_color": "#161915",
+  "lang": "pt-BR",
+  "icons": [
+    { "src": "pieces/wN.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
