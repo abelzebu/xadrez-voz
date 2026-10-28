@@ -6,6 +6,7 @@ const COLUNAS = 'abcdefgh';
 const NOME = { k: 'Rei', q: 'Rainha', r: 'Torre', b: 'Bispo', n: 'Cavalo', p: 'Peão' };
 const PLURAL = { k: 'Reis', q: 'Rainhas', r: 'Torres', b: 'Bispos', n: 'Cavalos', p: 'Peões' };
 const FEMININO = { q: true, r: true };
+const VALOR = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
 // Como a voz deve pronunciar cada coluna (evita "e4" virar "i quatro")
 const LETRA_FALADA = { a: 'á', b: 'bê', c: 'cê', d: 'dê', e: 'é', f: 'éfe', g: 'gê', h: 'agá' };
 const NOTACAO_PT = { K: 'R', Q: 'D', R: 'T', B: 'B', N: 'C' };
@@ -25,6 +26,30 @@ const NIVEIS = [
   { elo: 2500, skill: 20, depth: 18, random: 0,    time: 2000, desc: 'Força de mestre. Quase não erra.' },
 ];
 
+// Classificação dos lances na análise, na ordem da tabela de resumo
+const CLASSES = {
+  brilhante:  { nome: 'Brilhante',      simbolo: '!!', cor: '#1fae9b', frase: s => `${s} é brilhante!` },
+  otimo:      { nome: 'Ótimo',          simbolo: '!',  cor: '#5f8fbd', frase: s => `${s} é um ótimo lance.` },
+  melhor:     { nome: 'Melhor',         simbolo: '★',  cor: '#7fb04a', frase: s => `${s} é o melhor lance.` },
+  excelente:  { nome: 'Excelente',      simbolo: '✓',  cor: '#96bc4b', frase: s => `${s} é excelente.` },
+  bom:        { nome: 'Bom',            simbolo: '✓',  cor: '#8fa882', frase: s => `${s} é um bom lance.` },
+  forcado:    { nome: 'Único lance',    simbolo: '→',  cor: '#8b8f86', frase: s => `${s} era o único lance possível.` },
+  imprecisao: { nome: 'Imprecisão',     simbolo: '?!', cor: '#e8b93c', frase: s => `${s} é uma imprecisão.` },
+  erro:       { nome: 'Erro',           simbolo: '?',  cor: '#e88a2a', frase: s => `${s} é um erro.` },
+  perdida:    { nome: 'Chance perdida', simbolo: '✕',  cor: '#e0644f', frase: s => `${s} deixou passar uma chance.` },
+  capivarada: { nome: 'Capivarada',     simbolo: '??', cor: '#c9302c', frase: s => `${s} é uma capivarada.` },
+};
+const DETALHE = {
+  brilhante: 'Um sacrifício que funciona.',
+  otimo: 'Era o único lance que mantinha a sua situação.',
+  perdida: 'O adversário tinha errado e você não aproveitou.',
+};
+
+const MOTIVO = {
+  'Xeque-mate': 'por xeque-mate', 'Afogamento': 'por afogamento', 'Repetição de posição': 'por repetição de posição',
+  'Material insuficiente': 'por material insuficiente', 'Regra dos 50 lances': 'pela regra dos 50 lances', 'Desistência': 'por desistência',
+};
+
 // Reconhecimento: palavras (sem acento) que valem como coluna, número e peça
 const LETRAS = { a: 'a', ah: 'a', ha: 'a', b: 'b', be: 'b', bi: 'b', c: 'c', ce: 'c', se: 'c', si: 'c', d: 'd', de: 'd', di: 'd',
   e: 'e', eh: 'e', f: 'f', ef: 'f', efe: 'f', g: 'g', ge: 'g', je: 'g', gue: 'g', h: 'h', aga: 'h', haga: 'h' };
@@ -34,6 +59,7 @@ const PECAS = { rei: 'k', rainha: 'q', raina: 'q', dama: 'q', torre: 'r', bispo:
 
 const $ = s => document.querySelector(s);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 const store = {
   get(k, padrao) { try { const v = localStorage.getItem('xv:' + k); return v == null ? padrao : JSON.parse(v); } catch { return padrao; } },
@@ -41,12 +67,13 @@ const store = {
   del(k) { try { localStorage.removeItem('xv:' + k); } catch {} },
 };
 
-const config = Object.assign({ elo: 800, cor: 'w', falar: true, ouvirAuto: true, eco: true }, store.get('config', {}));
+const config = Object.assign({ elo: 800, cor: 'w', falar: true, ouvirAuto: true, eco: true, voz: '', vel: 1.02, tom: 1 }, store.get('config', {}));
 const salvarConfig = () => store.set('config', config);
 
 let game = null, minhaCor = 'w', nivel = NIVEIS[2];
 let pensando = false, fimDeJogo = false, emJogo = false, buscaId = 0;
 let selecionada = null, dicaCasas = null, ultimaFala = '', confirmarDesistencia = false, wakeLock = null;
+let vendo = null; // lance sendo revisto durante a partida (null = posição atual)
 
 // ---------- Motor ----------
 
@@ -58,24 +85,42 @@ const motor = {
       this.worker = new Worker('vendor/stockfish.js');
       this.worker.onmessage = e => {
         const linha = typeof e.data === 'string' ? e.data : '';
-        if (linha.startsWith('bestmove')) { const cb = this.fila.shift(); if (cb) cb(linha.split(' ')[1]); }
+        const atual = this.fila[0];
+        if (!atual) return;
+        if (linha.startsWith('info') && atual.info) atual.info(linha);
+        else if (linha.startsWith('bestmove')) { this.fila.shift(); atual.fim(linha.split(' ')[1]); }
       };
-      this.worker.onerror = () => { this.worker = null; this.fila.splice(0).forEach(cb => cb(null)); };
+      this.worker.onerror = () => { this.worker = null; this.fila.splice(0).forEach(x => x.fim(null)); };
       this.enviar('uci');
       this.enviar('setoption name Hash value 16');
       this.enviar('isready');
     } catch { this.worker = null; }
   },
   enviar(cmd) { if (this.worker) this.worker.postMessage(cmd); },
-  buscar(fen, { skill, depth, time }) {
+  // Cada "go" gera exatamente um bestmove, então a fila sempre fica alinhada
+  pedir(cmds, info, limite) {
     if (!this.worker) return Promise.resolve(null);
-    const resposta = new Promise(res => {
-      this.fila.push(res);
-      this.enviar('setoption name Skill Level value ' + skill);
-      this.enviar('position fen ' + fen);
-      this.enviar(`go depth ${depth} movetime ${time}`);
-    });
-    return Promise.race([resposta, sleep(time + 8000).then(() => null)]);
+    const resposta = new Promise(res => { this.fila.push({ fim: res, info }); cmds.forEach(c => this.enviar(c)); });
+    return Promise.race([resposta, sleep(limite).then(() => null)]);
+  },
+  buscar(fen, { skill, depth, time }) {
+    return this.pedir([
+      'setoption name MultiPV value 1', 'setoption name Skill Level value ' + skill,
+      'position fen ' + fen, `go depth ${depth} movetime ${time}`,
+    ], null, time + 8000);
+  },
+  async analisar(fen, { depth = 13, time = 800, multipv = 2 } = {}) {
+    const linhas = [];
+    const info = l => {
+      const m = l.match(/ multipv (\d+) .*?score (cp|mate) (-?\d+).*? pv (\S+)/);
+      if (m) linhas[+m[1] - 1] = { tipo: m[2], valor: +m[3], lance: m[4] };
+    };
+    const best = await this.pedir([
+      'setoption name Skill Level value 20', `setoption name MultiPV value ${multipv}`,
+      'position fen ' + fen, `go depth ${depth} movetime ${time}`,
+    ], info, time + 10000);
+    if (!best || best === '(none)') return null;
+    return { best, linhas: linhas.filter(Boolean) };
   },
   parar() { this.enviar('stop'); },
   novoJogo() { this.enviar('ucinewgame'); this.enviar('isready'); },
@@ -86,10 +131,12 @@ const motor = {
 const fala = {
   voz: null, fila: Promise.resolve(), pendentes: 0,
   get falando() { return this.pendentes > 0; },
+  vozes() { return 'speechSynthesis' in window ? speechSynthesis.getVoices() : []; },
   escolherVoz() {
-    const vozes = speechSynthesis.getVoices();
+    const vozes = this.vozes();
     const pt = vozes.filter(v => (v.lang || '').replace('_', '-').toLowerCase().startsWith('pt-br'));
-    this.voz = pt.find(v => /google/i.test(v.name)) || pt[0] || vozes.find(v => (v.lang || '').startsWith('pt')) || null;
+    this.voz = (config.voz && vozes.find(v => v.name === config.voz))
+      || pt.find(v => /google/i.test(v.name)) || pt[0] || vozes.find(v => (v.lang || '').startsWith('pt')) || null;
   },
   dizer(texto, forcar = false) {
     if (!('speechSynthesis' in window) || (!config.falar && !forcar) || !texto) return Promise.resolve();
@@ -106,20 +153,21 @@ const fala = {
     return new Promise(res => {
       const u = new SpeechSynthesisUtterance(texto);
       u.lang = 'pt-BR';
-      if (this.voz) u.voice = this.voz;
-      u.rate = 1.02;
+      if (this.voz) { u.voice = this.voz; u.lang = this.voz.lang; }
+      u.rate = config.vel;
+      u.pitch = config.tom;
       let feito = false;
       const fim = () => { if (!feito) { feito = true; res(); } };
       u.onend = fim; u.onerror = fim;
       speechSynthesis.speak(u);
-      setTimeout(fim, 2500 + texto.length * 110);
+      setTimeout(fim, 2500 + texto.length * 110 / config.vel);
     });
   },
   calar() { if ('speechSynthesis' in window) speechSynthesis.cancel(); },
 };
 if ('speechSynthesis' in window) {
   fala.escolherVoz();
-  speechSynthesis.addEventListener('voiceschanged', () => fala.escolherVoz());
+  speechSynthesis.addEventListener('voiceschanged', () => { fala.escolherVoz(); preencherVozes(); });
 }
 
 // ---------- Voz: ouvir ----------
@@ -272,7 +320,9 @@ function reouvir() { if (config.ouvirAuto && podeJogar()) ouvinte.iniciar(true);
 // ---------- Texto dos lances ----------
 
 const falarCasa = sq => `${LETRA_FALADA[sq[0]]} ${sq[1]}`;
+const casaEscrita = sq => sq;
 const juntar = (itens, conj = 'e') => itens.length < 2 ? itens.join('') : itens.slice(0, -1).join(', ') + ` ${conj} ` + itens[itens.length - 1];
+const sanPt = san => san.replace(/[KQRBN]/g, c => NOTACAO_PT[c]);
 
 function textoDoLance(m, casa = falarCasa) {
   let t;
@@ -303,6 +353,12 @@ function textoPosicao(casa = falarCasa) {
   return `Brancas: ${descrever('w')}. Pretas: ${descrever('b')}.`;
 }
 
+function posicaoApos(lances, k) {
+  const g = new Chess();
+  for (let i = 0; i < k; i++) g.move(lances[i].san);
+  return g;
+}
+
 // ---------- Partida ----------
 
 const podeJogar = () => emJogo && !fimDeJogo && !pensando && game && game.turn() === minhaCor;
@@ -310,8 +366,8 @@ const podeJogar = () => emJogo && !fimDeJogo && !pensando && game && game.turn()
 async function jogarMeuLance(m, porVoz) {
   const feito = game.move(m.san);
   if (!feito) return;
-  selecionada = null; dicaCasas = null; confirmarDesistencia = false;
-  desenhar(feito); tocar(feito.captured); atualizarLances(); salvarPartida();
+  selecionada = null; dicaCasas = null; confirmarDesistencia = false; vendo = null;
+  desenharJogo(feito); tocar(feito.captured); atualizarLances(); salvarPartida();
   const res = resultado();
   const eco = config.eco && porVoz ? fala.dizer('Você: ' + textoDoLance(feito)) : null;
   if (res) { await eco; return finalizar(res); }
@@ -332,10 +388,10 @@ async function vezDoComputador() {
   const feito = uci && game.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] || 'q' });
   pensando = false;
   if (!feito) { atualizarStatus(); return; }
-  dicaCasas = null;
-  desenhar(feito); tocar(feito.captured); atualizarLances(); salvarPartida();
+  dicaCasas = null; vendo = null;
+  desenharJogo(feito); tocar(feito.captured); atualizarLances(); salvarPartida();
   ultimaFala = textoDoLance(feito);
-  avisar(textoDoLance(feito, c => c));
+  avisar(textoDoLance(feito, casaEscrita));
   const res = resultado();
   atualizarStatus();
   await fala.dizer(ultimaFala);
@@ -374,19 +430,23 @@ async function finalizar({ r, motivo }) {
   s[r]++; placar[nivel.elo] = s;
   store.set('placar', placar);
   store.del('partida');
+  store.set('ultima', { sans: game.history(), cor: minhaCor, elo: nivel.elo, r, motivo });
   atualizarStatus();
 
   const titulo = { v: 'Você venceu!', e: 'Empate', d: 'Você perdeu' }[r];
+  const porque = MOTIVO[motivo] || '';
   const jogos = s.v + s.e + s.d;
-  let texto = `${motivo}. Contra o nível ${nivel.elo} você tem ${s.v} ${s.v === 1 ? 'vitória' : 'vitórias'}, ${s.e} ${s.e === 1 ? 'empate' : 'empates'} e ${s.d} ${s.d === 1 ? 'derrota' : 'derrotas'}.`;
+  let texto = `Contra o nível ${nivel.elo}: ${s.v} ${s.v === 1 ? 'vitória' : 'vitórias'}, ${s.e} ${s.e === 1 ? 'empate' : 'empates'} e ${s.d} ${s.d === 1 ? 'derrota' : 'derrotas'}.`;
   const proximo = NIVEIS[NIVEIS.indexOf(nivel) + 1];
   if (proximo && jogos >= 3 && (s.v + s.e / 2) / jogos >= 0.6) texto += ` Que tal tentar o nível ${proximo.elo}?`;
 
-  abrirFolha(titulo, texto, r, [
-    { rotulo: 'Mudar nível', acao: () => { fecharFolha(); irParaInicio(); } },
-    { rotulo: 'Jogar de novo', principal: true, acao: () => { fecharFolha(); comecar(false); } },
-  ]);
-  await fala.dizer(`${motivo}. ${titulo}`, true);
+  const rei = r === 'e' ? 'wK' : (r === 'v') === (minhaCor === 'w') ? 'wK' : 'bK';
+  abrirModal({ titulo, motivo: porque, texto, tipo: r, img: `pieces/${rei}.svg`, botoes: [
+    { rotulo: 'Jogar novamente', principal: true, acao: () => { fecharModal(); comecar(false); } },
+    { rotulo: 'Analisar partida', acao: () => { fecharModal(); abrirAnalise(store.get('ultima', null)); } },
+    { rotulo: 'Escolher nível', acao: () => { fecharModal(); irParaInicio(); } },
+  ] });
+  await fala.dizer(`${titulo.replace('!', '')} ${porque}.`, true);
 }
 
 async function comando(nome) {
@@ -396,7 +456,7 @@ async function comando(nome) {
       else await fala.dizer('Ainda não joguei nesta partida.', true);
       return reouvir();
     case 'posicao':
-      avisar(textoPosicao(c => c));
+      avisar(textoPosicao(casaEscrita));
       await fala.dizer(textoPosicao(), true);
       return reouvir();
     case 'dica': return dica();
@@ -423,9 +483,9 @@ async function dica() {
   if (!uci || game.fen() !== fen || !emJogo) return;
   const m = game.moves({ verbose: true }).find(x => x.from === uci.slice(0, 2) && x.to === uci.slice(2, 4));
   if (!m) return;
-  dicaCasas = [m.from, m.to];
-  desenhar();
-  avisar('Dica: ' + textoDoLance(m, c => c));
+  dicaCasas = [m.from, m.to]; vendo = null;
+  desenharJogo();
+  avisar('Dica: ' + textoDoLance(m, casaEscrita));
   await fala.dizer('Dica: ' + textoDoLance(m), true);
   reouvir();
 }
@@ -438,10 +498,10 @@ async function desfazer() {
     if (game.history().length < 2) { avisar('Nada para desfazer.'); return; }
     game.undo(); game.undo();
   } else return;
-  selecionada = null; dicaCasas = null;
+  selecionada = null; dicaCasas = null; vendo = null;
   const ultimo = game.history({ verbose: true }).pop();
   ultimaFala = ultimo && ultimo.color !== minhaCor ? textoDoLance(ultimo) : '';
-  desenhar(); atualizarLances(); salvarPartida(); atualizarStatus();
+  desenharJogo(); atualizarLances(); salvarPartida(); atualizarStatus();
   avisar('Lance desfeito. Volte as peças no tabuleiro.');
   await fala.dizer('Lance desfeito. Volte as peças no tabuleiro. Sua vez.', true);
   reouvir();
@@ -452,6 +512,7 @@ function salvarPartida() {
 }
 
 async function comecar(continuar) {
+  analise.id++;
   const salva = continuar ? store.get('partida', null) : null;
   game = new Chess();
   if (salva && game.load_pgn(salva.pgn)) {
@@ -465,15 +526,15 @@ async function comecar(continuar) {
   }
   motor.iniciar(); motor.novoJogo();
   emJogo = true; fimDeJogo = false; pensando = false; buscaId++;
-  selecionada = null; dicaCasas = null; confirmarDesistencia = false; ouvinte.falhas = 0;
+  selecionada = null; dicaCasas = null; confirmarDesistencia = false; ouvinte.falhas = 0; vendo = null;
   const ultimo = game.history({ verbose: true }).pop();
   ultimaFala = ultimo && ultimo.color !== minhaCor ? textoDoLance(ultimo) : '';
 
-  $('#inicio').hidden = true; $('#jogo').hidden = false;
+  mostrarTela('jogo');
   $('#nomeOponente').textContent = `Computador ${nivel.elo}`;
   $('#infoPartida').textContent = `Você joga de ${minhaCor === 'w' ? 'brancas' : 'pretas'}`;
   mostrarOuvido('');
-  desenhar(); atualizarLances(); atualizarMic();
+  desenharJogo(); atualizarLances(); atualizarMic();
   manterTelaLigada();
   if (!motor.worker) avisar('Não consegui iniciar o motor. O computador vai jogar lances aleatórios.');
 
@@ -487,19 +548,24 @@ async function comecar(continuar) {
 }
 
 function irParaInicio() {
-  emJogo = false; buscaId++; pensando = false;
+  emJogo = false; buscaId++; pensando = false; analise.id++;
   if (motor.worker) motor.parar();
   ouvinte.parar(); fala.calar();
   liberarTela();
-  $('#jogo').hidden = true; $('#inicio').hidden = false;
+  mostrarTela('inicio');
   desenharInicio();
+}
+
+function mostrarTela(qual) {
+  for (const id of ['inicio', 'jogo', 'analise']) $('#' + id).hidden = id !== qual;
+  window.scrollTo(0, 0);
 }
 
 // ---------- Tabuleiro ----------
 
-function casaDoRei(cor) {
+function casaDoRei(pos, cor) {
   for (const f of COLUNAS) for (let r = 1; r <= 8; r++) {
-    const p = game.get(f + r);
+    const p = pos.get(f + r);
     if (p && p.type === 'k' && p.color === cor) return f + r;
   }
   return null;
@@ -510,12 +576,8 @@ function posTela(sq, virar) {
   return virar ? [7 - f, r - 1] : [f, 8 - r];
 }
 
-function desenhar(animarLance) {
-  const tab = $('#tabuleiro');
-  const virar = minhaCor === 'b';
-  const ultimo = game.history({ verbose: true }).pop();
-  const xeque = game.in_check() ? casaDoRei(game.turn()) : null;
-  const alvos = selecionada ? game.moves({ square: selecionada, verbose: true }) : [];
+function desenharTabuleiro(tab, { pos, ultimo, virar, selecionada: sel = null, alvos = [], marcadas = null, selo = null, seta = null, animarLance = null }) {
+  const xeque = pos.in_check() ? casaDoRei(pos, pos.turn()) : null;
   const frag = document.createDocumentFragment();
 
   for (let lin = 0; lin < 8; lin++) for (let col = 0; col < 8; col++) {
@@ -525,14 +587,14 @@ function desenhar(animarLance) {
     el.className = 'casa ' + ((f + r) % 2 ? 'escura' : 'clara');
     el.dataset.casa = sq;
     if (ultimo && (sq === ultimo.from || sq === ultimo.to)) el.classList.add('ultimo');
-    if (sq === selecionada) el.classList.add('sel');
-    if (dicaCasas && dicaCasas.includes(sq)) el.classList.add('dica');
+    if (sq === sel) el.classList.add('sel');
+    if (marcadas && marcadas.includes(sq)) el.classList.add('dica');
     if (sq === xeque) el.classList.add('xeque');
     const alvo = alvos.find(m => m.to === sq);
     if (alvo) el.classList.add(alvo.captured ? 'alvo-captura' : 'alvo');
     if (col === 0) el.insertAdjacentHTML('beforeend', `<span class="coord r">${r}</span>`);
     if (lin === 7) el.insertAdjacentHTML('beforeend', `<span class="coord f">${COLUNAS[f]}</span>`);
-    const p = game.get(sq);
+    const p = pos.get(sq);
     if (p) {
       const img = document.createElement('img');
       img.src = `pieces/${p.color}${p.type.toUpperCase()}.svg`;
@@ -540,19 +602,43 @@ function desenhar(animarLance) {
       img.draggable = false;
       el.appendChild(img);
     }
+    if (selo && selo.casa === sq) {
+      const c = CLASSES[selo.classe];
+      el.insertAdjacentHTML('beforeend', `<span class="selo" style="background:${c.cor}" title="${c.nome}">${c.simbolo}</span>`);
+    }
     frag.appendChild(el);
   }
+  if (seta) frag.appendChild(desenharSeta(seta.from, seta.to, virar));
   tab.replaceChildren(frag);
-  if (animarLance && !matchMedia('(prefers-reduced-motion: reduce)').matches) animar(animarLance, virar);
+  if (animarLance && !matchMedia('(prefers-reduced-motion: reduce)').matches) animar(tab, animarLance, virar);
 }
 
-function animar(m, virar) {
+function desenharSeta(de, para, virar) {
+  const [x1, y1] = posTela(de, virar).map(v => v + 0.5);
+  const [x2, y2] = posTela(para, virar).map(v => v + 0.5);
+  const dx = x2 - x1, dy = y2 - y1, len = Math.hypot(dx, dy);
+  const ux = dx / len, uy = dy / len, px = -uy, py = ux;
+  const haste = 0.11, cabecaL = 0.28, cabecaC = 0.42;
+  const bx = x2 - ux * cabecaC, by = y2 - uy * cabecaC;
+  const sx = x1 + ux * 0.25, sy = y1 + uy * 0.25;
+  const pts = [
+    [sx + px * haste, sy + py * haste], [bx + px * haste, by + py * haste], [bx + px * cabecaL, by + py * cabecaL],
+    [x2, y2], [bx - px * cabecaL, by - py * cabecaL], [bx - px * haste, by - py * haste], [sx - px * haste, sy - py * haste],
+  ];
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 8 8');
+  svg.setAttribute('class', 'seta');
+  svg.innerHTML = `<path d="M${pts.map(p => p.map(v => v.toFixed(3)).join(' ')).join('L')}Z"/>`;
+  return svg;
+}
+
+function animar(tab, m, virar) {
   const pares = [[m.from, m.to]];
   const fileira = m.color === 'w' ? '1' : '8';
   if (m.flags.includes('k')) pares.push(['h' + fileira, 'f' + fileira]);
   if (m.flags.includes('q')) pares.push(['a' + fileira, 'd' + fileira]);
   for (const [de, para] of pares) {
-    const el = document.querySelector(`[data-casa="${para}"]`);
+    const el = tab.querySelector(`[data-casa="${para}"]`);
     const img = el && el.querySelector('img');
     if (!img) continue;
     const [x1, y1] = posTela(de, virar), [x2, y2] = posTela(para, virar);
@@ -566,7 +652,57 @@ function animar(m, virar) {
   }
 }
 
+function desenharJogo(animarLance) {
+  const lances = game.history({ verbose: true });
+  const k = vendo == null ? lances.length : vendo;
+  const aoVivo = vendo == null;
+  desenharTabuleiro($('#tabuleiro'), {
+    pos: aoVivo ? game : posicaoApos(lances, k),
+    ultimo: lances[k - 1],
+    virar: minhaCor === 'b',
+    selecionada: aoVivo ? selecionada : null,
+    alvos: aoVivo && selecionada ? game.moves({ square: selecionada, verbose: true }) : [],
+    marcadas: aoVivo ? dicaCasas : null,
+    animarLance,
+  });
+  const aviso = $('#vendoAviso');
+  aviso.hidden = aoVivo;
+  if (!aoVivo) aviso.textContent = `Revendo o lance ${k} de ${lances.length}. Toque no tabuleiro para voltar à posição atual.`;
+  atualizarNav($('#navJogo'), k, lances.length);
+  marcarLanceAtual($('#lances'), k);
+}
+
+function irParaJogo(destino) {
+  const n = game.history().length;
+  const atual = vendo == null ? n : vendo;
+  const k = { inicio: 0, anterior: atual - 1, proximo: atual + 1, fim: n }[destino] ?? +destino;
+  const alvo = Math.max(0, Math.min(n, k));
+  if (alvo === atual) return;
+  vendo = alvo >= n ? null : alvo;
+  const lances = game.history({ verbose: true });
+  desenharJogo(alvo === atual + 1 ? lances[alvo - 1] : null);
+}
+
+function atualizarNav(nav, k, n) {
+  nav.querySelector('[data-ir="inicio"]').disabled = k <= 0;
+  nav.querySelector('[data-ir="anterior"]').disabled = k <= 0;
+  nav.querySelector('[data-ir="proximo"]').disabled = k >= n;
+  nav.querySelector('[data-ir="fim"]').disabled = k >= n;
+}
+
+function marcarLanceAtual(ol, k) {
+  let atual = null;
+  ol.querySelectorAll('button[data-k]').forEach(b => {
+    const sim = +b.dataset.k === k;
+    b.setAttribute('aria-current', String(sim));
+    if (sim) atual = b;
+  });
+  if (atual) atual.scrollIntoView({ block: 'nearest', inline: 'center' });
+  else if (k === 0) ol.scrollLeft = 0;
+}
+
 $('#tabuleiro').addEventListener('click', e => {
+  if (vendo != null) { vendo = null; desenharJogo(); return; }
   const el = e.target.closest('.casa');
   if (!el || !podeJogar()) return;
   const sq = el.dataset.casa;
@@ -576,7 +712,269 @@ $('#tabuleiro').addEventListener('click', e => {
   }
   const p = game.get(sq);
   selecionada = p && p.color === minhaCor && sq !== selecionada ? sq : null;
-  desenhar();
+  desenharJogo();
+});
+
+// ---------- Análise ----------
+
+const analise = { id: 0, lances: [], posicoes: [], avals: [], classes: [], indice: 0, cor: 'w', elo: 0, pronta: false };
+
+// Chance de vitória (0–100) a partir da avaliação em centipeões, como no Lichess
+function chance(s) {
+  if (s.tipo === 'mate') return s.valor > 0 ? 100 : 0;
+  const cp = Math.max(-2000, Math.min(2000, s.valor));
+  return 50 + 50 * (2 / (1 + Math.exp(-0.00368208 * cp)) - 1);
+}
+
+async function avaliarPosicao(fen) {
+  const g = new Chess(fen);
+  const vezBrancas = g.turn() === 'w';
+  if (g.in_checkmate()) return { brancas: vezBrancas ? 0 : 100, nota: { tipo: 'mate', valor: 0, vencedorBrancas: !vezBrancas }, legais: 0 };
+  if (g.game_over()) return { brancas: 50, nota: { tipo: 'cp', valor: 0 }, legais: g.moves().length };
+  const r = await motor.analisar(fen);
+  if (!r || !r.linhas.length) return null;
+  const [l1, l2] = r.linhas;
+  const c1 = chance(l1);
+  return {
+    brancas: vezBrancas ? c1 : 100 - c1,
+    segunda: l2 ? chance(l2) : null, // do ponto de vista de quem joga
+    melhor: r.best,
+    nota: { tipo: l1.tipo, valor: vezBrancas ? l1.valor : -l1.valor },
+    legais: g.moves().length,
+  };
+}
+
+function ehSacrificio(fen, m) {
+  if (m.piece === 'p' || m.piece === 'k') return false;
+  const g = new Chess(fen);
+  g.move(m.san);
+  const v = VALOR[m.promotion || m.piece];
+  const ganho = m.captured ? VALOR[m.captured] : 0;
+  const capturas = g.moves({ verbose: true }).filter(x => x.to === m.to);
+  if (!capturas.length) return false;
+  const menor = capturas.reduce((a, b) => (VALOR[a.piece] <= VALOR[b.piece] ? a : b));
+  g.move(menor.san);
+  const retoma = g.moves({ verbose: true }).some(x => x.to === m.to);
+  return ganho - v + (retoma ? VALOR[menor.piece] : 0) <= -2;
+}
+
+function classificar(i) {
+  const { lances, posicoes, avals, classes } = analise;
+  const m = lances[i], a = avals[i], d = avals[i + 1];
+  const brancas = m.color === 'w';
+  const antes = brancas ? a.brancas : 100 - a.brancas;
+  const depois = brancas ? d.brancas : 100 - d.brancas;
+  const perda = Math.max(0, antes - depois);
+  const jogouMelhor = a.melhor === m.from + m.to + (m.promotion || '');
+  const anterior = classes[i - 1] && classes[i - 1].k;
+  let k;
+  if (a.legais === 1) k = 'forcado';
+  else if (jogouMelhor || perda < 1) {
+    const recaptura = i > 0 && m.captured && lances[i - 1].captured && lances[i - 1].to === m.to;
+    if (ehSacrificio(posicoes[i], m) && depois >= 45 && antes < 97) k = 'brilhante';
+    else if (jogouMelhor && !recaptura && a.segunda != null && antes - a.segunda >= 15 && antes < 97) k = 'otimo';
+    else k = jogouMelhor ? 'melhor' : 'excelente';
+  }
+  else if (perda < 2) k = 'excelente';
+  else if (perda < 5) k = 'bom';
+  else if (perda < 10) k = 'imprecisao';
+  else if (perda < 20) k = 'erro';
+  else k = 'capivarada';
+  if (perda >= 10 && depois >= 40 && (anterior === 'erro' || anterior === 'capivarada')) k = 'perdida';
+  return { k, perda };
+}
+
+function precisao(cor) {
+  const ps = analise.classes.filter((c, i) => c && analise.lances[i].color === cor);
+  if (!ps.length) return null;
+  const soma = ps.reduce((t, c) => t + Math.max(0, Math.min(100, 103.1668 * Math.exp(-0.04354 * c.perda) - 3.1669)), 0);
+  return soma / ps.length;
+}
+
+async function abrirAnalise(partida) {
+  if (!partida || !partida.sans || !partida.sans.length) return;
+  emJogo = false; buscaId++; ouvinte.parar(); fala.calar(); liberarTela();
+  const id = ++analise.id;
+  const g = new Chess();
+  const posicoes = [g.fen()];
+  const lances = [];
+  for (const san of partida.sans) { const m = g.move(san); if (!m) break; lances.push(m); posicoes.push(g.fen()); }
+  Object.assign(analise, { lances, posicoes, avals: [], classes: [], indice: lances.length, cor: partida.cor, elo: partida.elo, pronta: false });
+
+  mostrarTela('analise');
+  const res = partida.r ? { v: 'Vitória', e: 'Empate', d: 'Derrota' }[partida.r] + ' ' + (MOTIVO[partida.motivo] || '') : '';
+  $('#anInfo').textContent = `Contra o ${partida.elo}${res ? ' · ' + res : ''}`;
+  $('#precPcNome').textContent = `Computador ${partida.elo}`;
+  $('#anProgresso').hidden = false; $('#anPrecisao').hidden = true;
+  desenharAnalise();
+  motor.iniciar();
+
+  for (let i = 0; i < posicoes.length; i++) {
+    $('#anProgressoTexto').textContent = `Analisando lance ${i} de ${lances.length}…`;
+    $('#anProgressoBarra').style.width = `${(i / posicoes.length) * 100}%`;
+    let a = await avaliarPosicao(posicoes[i]);
+    if (id !== analise.id) return;
+    if (!a) a = { brancas: analise.avals[i - 1] ? analise.avals[i - 1].brancas : 50, nota: null, legais: 2 };
+    analise.avals[i] = a;
+    if (i > 0) analise.classes[i - 1] = classificar(i - 1);
+    desenharAnalise();
+  }
+  analise.pronta = true;
+  $('#anProgresso').hidden = true; $('#anPrecisao').hidden = false;
+  const minha = precisao(analise.cor), dele = precisao(analise.cor === 'w' ? 'b' : 'w');
+  $('#precVoce').textContent = minha == null ? '–' : minha.toFixed(1).replace('.', ',');
+  $('#precPc').textContent = dele == null ? '–' : dele.toFixed(1).replace('.', ',');
+  desenharAnalise();
+  if (minha != null) fala.dizer(`Análise pronta. Sua precisão foi de ${Math.round(minha)} por cento.`);
+}
+
+function textoNota(nota) {
+  if (!nota) return '';
+  if (nota.tipo === 'mate') {
+    if (nota.valor === 0) return nota.vencedorBrancas ? '1-0' : '0-1';
+    return (nota.valor > 0 ? '' : '-') + 'M' + Math.abs(nota.valor);
+  }
+  const v = nota.valor / 100;
+  return (v > 0 ? '+' : '') + v.toFixed(1).replace('.', ',');
+}
+
+function comentarioAtual() {
+  const k = analise.indice;
+  if (k === 0) return { titulo: 'Posição inicial', detalhe: 'Use as setas para ver cada lance.' };
+  const m = analise.lances[k - 1];
+  const c = analise.classes[k - 1];
+  const quem = m.color === analise.cor ? 'Você' : 'Computador';
+  if (!c) return { titulo: `${sanPt(m.san)}`, detalhe: 'Ainda analisando este lance…' };
+  const info = CLASSES[c.k];
+  let detalhe = (quem === 'Você' ? 'Seu lance.' : 'Lance do computador.') + (DETALHE[c.k] ? ' ' + DETALHE[c.k] : '');
+  const a = analise.avals[k - 1];
+  const naoFoiMelhor = a && a.melhor && a.melhor !== m.from + m.to + (m.promotion || '');
+  let melhor = null;
+  if (naoFoiMelhor && !['brilhante', 'melhor', 'forcado'].includes(c.k)) {
+    const g = new Chess(analise.posicoes[k - 1]);
+    melhor = g.move({ from: a.melhor.slice(0, 2), to: a.melhor.slice(2, 4), promotion: a.melhor[4] || 'q' });
+    if (melhor) detalhe += ` O melhor era ${sanPt(melhor.san)}.`;
+  }
+  return { titulo: info.frase(sanPt(m.san)), detalhe: detalhe.trim(), classe: c.k, quem, melhor };
+}
+
+function desenharAnalise() {
+  const { lances, posicoes, avals, classes, indice: k, cor } = analise;
+  const virar = cor === 'b';
+  const c = classes[k - 1];
+  const a = avals[k - 1];
+  const m = lances[k - 1];
+  let seta = null;
+  if (m && c && a && a.melhor && !['brilhante', 'melhor', 'forcado'].includes(c.k) && a.melhor !== m.from + m.to + (m.promotion || '')) {
+    seta = { from: a.melhor.slice(0, 2), to: a.melhor.slice(2, 4) };
+  }
+  desenharTabuleiro($('#anTabuleiro'), {
+    pos: new Chess(posicoes[k]), ultimo: m, virar,
+    selo: m && c ? { casa: m.to, classe: c.k } : null, seta,
+  });
+
+  // Barra de avaliação
+  const av = avals[k];
+  const barra = $('#barraAval');
+  barra.classList.toggle('virada', virar);
+  barra.firstElementChild.style.height = `${av ? av.brancas : 50}%`;
+  const nota = $('#anAval');
+  nota.hidden = !av || !av.nota;
+  if (av && av.nota) nota.textContent = textoNota(av.nota);
+
+  const com = comentarioAtual();
+  $('#anTitulo').textContent = com.titulo;
+  $('#anDetalhe').textContent = com.detalhe;
+  const selo = $('#anSelo');
+  selo.hidden = !com.classe;
+  if (com.classe) { selo.textContent = CLASSES[com.classe].simbolo; selo.style.background = CLASSES[com.classe].cor; }
+
+  // Lista de lances com selos
+  let html = '';
+  for (let i = 0; i < lances.length; i += 2) {
+    html += `<li><b>${i / 2 + 1}.</b>`;
+    for (const j of [i, i + 1]) {
+      if (!lances[j]) continue;
+      const cj = classes[j] && CLASSES[classes[j].k];
+      const s = cj && !['melhor', 'excelente', 'bom', 'forcado'].includes(classes[j].k)
+        ? `<span class="selo selo-mini" style="background:${cj.cor}">${cj.simbolo}</span>` : '';
+      html += `<button data-k="${j + 1}">${s}${esc(sanPt(lances[j].san))}</button>`;
+    }
+    html += '</li>';
+  }
+  const ol = $('#anLances');
+  ol.innerHTML = html;
+  marcarLanceAtual(ol, k);
+  atualizarNav($('#navAnalise'), k, lances.length);
+  desenharGrafico();
+  desenharResumo();
+}
+
+function desenharGrafico() {
+  const { avals, classes, indice, lances } = analise;
+  const svg = $('#grafico');
+  const W = 300, H = 72, n = lances.length;
+  const x = i => (n ? (i / n) * W : 0);
+  const y = v => H - (v / 100) * H;
+  const pts = avals.map((a, i) => `${x(i).toFixed(1)},${y(a.brancas).toFixed(1)}`);
+  let s = `<line x1="0" y1="${H / 2}" x2="${W}" y2="${H / 2}" stroke="#6b7066" stroke-width="1" vector-effect="non-scaling-stroke"/>`;
+  if (pts.length) s += `<polygon points="0,${H} ${pts.join(' ')} ${x(avals.length - 1).toFixed(1)},${H}" fill="#f2f0ea"/>`;
+  classes.forEach((c, i) => {
+    if (!c || !['erro', 'capivarada', 'perdida', 'brilhante'].includes(c.k)) return;
+    s += `<circle cx="${x(i + 1).toFixed(1)}" cy="${y(avals[i + 1].brancas).toFixed(1)}" r="3.2" fill="${CLASSES[c.k].cor}" stroke="#20241e" stroke-width="1" vector-effect="non-scaling-stroke"/>`;
+  });
+  s += `<line x1="${x(indice).toFixed(1)}" y1="0" x2="${x(indice).toFixed(1)}" y2="${H}" stroke="${getComputedStyle(document.documentElement).getPropertyValue('--acento').trim()}" stroke-width="2" vector-effect="non-scaling-stroke"/>`;
+  svg.innerHTML = s;
+}
+
+function desenharResumo() {
+  const { classes, lances, cor } = analise;
+  const conta = { w: {}, b: {} };
+  classes.forEach((c, i) => { if (c) conta[lances[i].color][c.k] = (conta[lances[i].color][c.k] || 0) + 1; });
+  const outra = cor === 'w' ? 'b' : 'w';
+  let html = '<tr><td>Você</td><td></td><td>PC</td></tr>';
+  for (const [k, info] of Object.entries(CLASSES)) {
+    const a = conta[cor][k] || 0, b = conta[outra][k] || 0;
+    html += `<tr class="${a || b ? '' : 'zero'}"><td style="color:${a ? info.cor : ''}">${a}</td>`
+      + `<td class="nome-cel"><span class="nome"><span class="selo selo-mini" style="background:${info.cor}">${info.simbolo}</span>${info.nome}</span></td>`
+      + `<td style="color:${b ? info.cor : ''}">${b}</td></tr>`;
+  }
+  $('#anTabela').innerHTML = html;
+}
+
+function irParaAnalise(destino) {
+  const n = analise.lances.length, atual = analise.indice;
+  const k = { inicio: 0, anterior: atual - 1, proximo: atual + 1, fim: n }[destino] ?? +destino;
+  const alvo = Math.max(0, Math.min(n, k));
+  if (alvo === atual) return;
+  analise.indice = alvo;
+  desenharAnalise();
+  if (alvo === atual + 1) animar($('#anTabuleiro'), analise.lances[alvo - 1], analise.cor === 'b');
+}
+
+$('#navAnalise').addEventListener('click', e => { const b = e.target.closest('[data-ir]'); if (b) irParaAnalise(b.dataset.ir); });
+$('#anLances').addEventListener('click', e => { const b = e.target.closest('[data-k]'); if (b) irParaAnalise(b.dataset.k); });
+$('#grafico').addEventListener('click', e => {
+  const r = e.currentTarget.getBoundingClientRect();
+  irParaAnalise(String(Math.round(((e.clientX - r.left) / r.width) * analise.lances.length)));
+});
+$('#anFalar').addEventListener('click', () => {
+  const c = comentarioAtual();
+  const m = analise.lances[analise.indice - 1];
+  fala.calar();
+  if (!m || !c.classe) { fala.dizer(c.titulo + '. ' + c.detalhe, true); return; }
+  const partes = [`${c.quem}: ${textoDoLance(m)}.`, `${CLASSES[c.classe].nome}.`, DETALHE[c.classe] || ''];
+  if (c.melhor) partes.push(`O melhor era ${textoDoLance(c.melhor)}.`);
+  fala.dizer(partes.join(' '), true);
+});
+$('#sairAnalise').addEventListener('click', irParaInicio);
+
+// Setas do teclado (no computador) para navegar
+document.addEventListener('keydown', e => {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key) || e.target.closest('input, select')) return;
+  const d = { ArrowLeft: 'anterior', ArrowRight: 'proximo', Home: 'inicio', End: 'fim' }[e.key];
+  if (!$('#analise').hidden) irParaAnalise(d);
+  else if (!$('#jogo').hidden && game) irParaJogo(d);
 });
 
 // ---------- Som ----------
@@ -627,20 +1025,27 @@ function atualizarMic() {
 }
 
 function atualizarLances() {
-  const h = game.history().map(san => san.replace(/[KQRBN]/g, c => NOTACAO_PT[c]));
+  const h = game.history();
   let html = '';
-  for (let i = 0; i < h.length; i += 2) html += `<li><b>${i / 2 + 1}.</b> ${h[i]}${h[i + 1] ? ' ' + h[i + 1] : ''}</li>`;
+  for (let i = 0; i < h.length; i += 2) {
+    html += `<li><b>${i / 2 + 1}.</b><button data-k="${i + 1}">${esc(sanPt(h[i]))}</button>`;
+    if (h[i + 1]) html += `<button data-k="${i + 2}">${esc(sanPt(h[i + 1]))}</button>`;
+    html += '</li>';
+  }
   const ol = $('#lances');
   ol.innerHTML = html;
-  ol.scrollLeft = ol.scrollWidth;
+  marcarLanceAtual(ol, vendo == null ? h.length : vendo);
+  atualizarNav($('#navJogo'), vendo == null ? h.length : vendo, h.length);
 }
 
-function abrirFolha(titulo, texto, tipo, botoes) {
-  const t = $('#folhaTitulo');
+function abrirModal({ titulo, motivo, texto, tipo, img, botoes }) {
+  const t = $('#modalTitulo');
   t.textContent = titulo;
   t.className = tipo || '';
-  $('#folhaTexto').textContent = texto;
-  const box = $('#folhaBotoes');
+  $('#modalMotivo').textContent = motivo ? motivo[0].toUpperCase() + motivo.slice(1) : '';
+  $('#modalTexto').textContent = texto;
+  $('#modalImg').src = img;
+  const box = $('#modalBotoes');
   box.replaceChildren(...botoes.map(b => {
     const el = document.createElement('button');
     el.className = b.principal ? 'botao-principal' : 'botao-secundario';
@@ -648,9 +1053,9 @@ function abrirFolha(titulo, texto, tipo, botoes) {
     el.addEventListener('click', b.acao);
     return el;
   }));
-  $('#folha').hidden = false;
+  $('#modal').hidden = false;
 }
-function fecharFolha() { $('#folha').hidden = true; }
+function fecharModal() { $('#modal').hidden = true; }
 
 async function manterTelaLigada() {
   try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch {}
@@ -661,6 +1066,17 @@ document.addEventListener('visibilitychange', () => {
 });
 
 // ---------- Tela inicial ----------
+
+function preencherVozes() {
+  const sel = $('#optVoz');
+  const todas = fala.vozes();
+  const pt = todas.filter(v => /^pt/i.test(v.lang || ''));
+  const lista = pt.length ? pt : todas;
+  sel.innerHTML = '<option value="">Automática</option>'
+    + lista.map(v => `<option value="${esc(v.name)}">${esc(v.name)}${v.lang ? ' · ' + esc(v.lang) : ''}</option>`).join('');
+  sel.value = lista.some(v => v.name === config.voz) ? config.voz : '';
+  sel.disabled = !todas.length;
+}
 
 function desenharInicio() {
   const placar = store.get('placar', {});
@@ -675,11 +1091,16 @@ function desenharInicio() {
   $('#optFalar').checked = config.falar;
   $('#optOuvir').checked = config.ouvirAuto;
   $('#optEco').checked = config.eco;
+  $('#optVel').value = config.vel; $('#valVel').textContent = Number(config.vel).toFixed(2).replace('.', ',') + '×';
+  $('#optTom').value = config.tom; $('#valTom').textContent = Number(config.tom).toFixed(2).replace('.', ',');
+  preencherVozes();
 
   const salva = store.get('partida', null);
   const cont = $('#continuar');
   cont.hidden = !salva;
   if (salva) cont.textContent = `Continuar partida contra o ${salva.elo} (${salva.cor === 'w' ? 'brancas' : 'pretas'})`;
+  const ultima = store.get('ultima', null);
+  $('#analisarUltima').hidden = !(ultima && ultima.sans && ultima.sans.length);
 
   const avisos = [];
   if (!SR) avisos.push('Este navegador não reconhece voz. No celular, abra no Google Chrome.');
@@ -702,8 +1123,13 @@ $('#cores').addEventListener('click', e => {
 $('#optFalar').addEventListener('change', e => { config.falar = e.target.checked; salvarConfig(); });
 $('#optOuvir').addEventListener('change', e => { config.ouvirAuto = e.target.checked; salvarConfig(); });
 $('#optEco').addEventListener('change', e => { config.eco = e.target.checked; salvarConfig(); });
+$('#optVoz').addEventListener('change', e => { config.voz = e.target.value; salvarConfig(); fala.escolherVoz(); });
+$('#optVel').addEventListener('input', e => { config.vel = +e.target.value; salvarConfig(); $('#valVel').textContent = config.vel.toFixed(2).replace('.', ',') + '×'; });
+$('#optTom').addEventListener('input', e => { config.tom = +e.target.value; salvarConfig(); $('#valTom').textContent = config.tom.toFixed(2).replace('.', ','); });
+$('#testarVoz').addEventListener('click', () => { fala.calar(); fala.dizer('Cavalo de gê 1 para éfe 3. Xeque.', true); });
 $('#comecar').addEventListener('click', () => comecar(false));
 $('#continuar').addEventListener('click', () => comecar(true));
+$('#analisarUltima').addEventListener('click', () => abrirAnalise(store.get('ultima', null)));
 
 // ---------- Botões do jogo ----------
 
@@ -720,15 +1146,17 @@ $('#cego').addEventListener('click', e => {
   b.setAttribute('aria-pressed', String(on));
   $('#tabuleiro').classList.toggle('cego', on);
 });
+$('#navJogo').addEventListener('click', e => { const b = e.target.closest('[data-ir]'); if (b && game) irParaJogo(b.dataset.ir); });
+$('#lances').addEventListener('click', e => { const b = e.target.closest('[data-k]'); if (b && game) irParaJogo(b.dataset.k); });
 $('#aRepetir').addEventListener('click', () => comando('repetir'));
 $('#aPosicao').addEventListener('click', () => comando('posicao'));
 $('#aDica').addEventListener('click', dica);
 $('#aDesfazer').addEventListener('click', desfazer);
 $('#aDesistir').addEventListener('click', () => {
-  abrirFolha('Desistir da partida?', 'Conta como derrota neste nível.', 'd', [
-    { rotulo: 'Continuar jogando', acao: fecharFolha },
-    { rotulo: 'Desistir', principal: true, acao: () => { fecharFolha(); finalizar({ r: 'd', motivo: 'Desistência' }); } },
-  ]);
+  abrirModal({ titulo: 'Desistir?', motivo: '', texto: 'A partida conta como derrota neste nível.', tipo: 'd', img: `pieces/${minhaCor}K.svg`, botoes: [
+    { rotulo: 'Continuar jogando', principal: true, acao: fecharModal },
+    { rotulo: 'Desistir', acao: () => { fecharModal(); finalizar({ r: 'd', motivo: 'Desistência' }); } },
+  ] });
 });
 
 desenharInicio();

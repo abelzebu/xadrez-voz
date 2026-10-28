@@ -27,6 +27,7 @@
     --xeque: #d9533f;
     --vitoria: #7fbf6a;
     --derrota: #e0705c;
+    --seta: rgba(110, 190, 90, .85);
     --display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
     --corpo: "Figtree", "Segoe UI", system-ui, sans-serif;
     color-scheme: dark;
@@ -39,7 +40,7 @@
     font: 16px/1.45 var(--corpo);
     -webkit-tap-highlight-color: transparent;
   }
-  button { font: inherit; color: inherit; }
+  button, select { font: inherit; color: inherit; }
   .tela {
     max-width: 560px; margin: 0 auto; min-height: 100%;
     display: flex; flex-direction: column; gap: 16px;
@@ -71,10 +72,14 @@
 
   .opcoes { display: flex; flex-direction: column; gap: 4px; }
   .opcao { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; cursor: pointer; }
-  .opcao input { width: 44px; height: 26px; appearance: none; background: var(--linha); border-radius: 99px; position: relative; cursor: pointer; flex: none; transition: background .15s; }
-  .opcao input::after { content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: var(--texto); transition: transform .15s; }
-  .opcao input:checked { background: var(--acento); }
-  .opcao input:checked::after { transform: translateX(18px); background: var(--acento-texto); }
+  .opcao input[type="checkbox"] { width: 44px; height: 26px; appearance: none; background: var(--linha); border-radius: 99px; position: relative; cursor: pointer; flex: none; transition: background .15s; }
+  .opcao input[type="checkbox"]::after { content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: var(--texto); transition: transform .15s; }
+  .opcao input[type="checkbox"]:checked { background: var(--acento); }
+  .opcao input[type="checkbox"]:checked::after { transform: translateX(18px); background: var(--acento-texto); }
+  .opcao input[type="range"] { width: 46%; accent-color: var(--acento); }
+  .campo { display: flex; flex-direction: column; gap: 6px; padding: 4px 0 8px; }
+  .campo select { width: 100%; background: var(--painel-2); border: 1px solid var(--linha); border-radius: 10px; padding: 10px 12px; }
+  .valor { font-variant-numeric: tabular-nums; color: var(--suave); font-size: .85rem; min-width: 3.2em; text-align: right; }
 
   .botao-principal {
     border: 0; border-radius: 12px; padding: 16px; cursor: pointer;
@@ -83,25 +88,26 @@
   .botao-secundario { border: 1px solid var(--linha); background: transparent; border-radius: 12px; padding: 14px; cursor: pointer; font-weight: 600; }
   .aviso { background: #3a2420; color: #f3c2b8; border-radius: 10px; padding: 12px 14px; font-size: .92rem; }
   .exemplos { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; font-size: .95rem; }
-  .exemplos li { display: flex; gap: 10px; align-items: baseline; }
+  .exemplos li { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
   .exemplos q { quotes: "“" "”"; color: var(--texto); font-weight: 600; }
   .exemplos span { color: var(--suave); font-size: .85rem; }
   .creditos { color: var(--suave); font-size: .75rem; text-align: center; margin: 0; }
   .creditos a { color: inherit; }
 
   /* Jogo */
-  #jogo { gap: 12px; }
+  #jogo, #analise { gap: 12px; }
   .topo { display: flex; align-items: center; gap: 10px; }
   .icone { width: 42px; height: 42px; border-radius: 10px; border: 0; background: var(--painel); display: grid; place-items: center; cursor: pointer; flex: none; }
-  .icone svg, .acao svg { width: 22px; height: 22px; }
+  .icone svg, .acao svg, .nav svg { width: 22px; height: 22px; }
   .oponente { flex: 1; min-width: 0; }
   .oponente b { font: 800 1.1rem/1.1 var(--display); display: block; }
   .oponente span { color: var(--suave); font-size: .88rem; }
   .icone[aria-pressed="true"] { background: var(--acento); color: var(--acento-texto); }
 
-  .tab-wrap { width: 100%; max-width: min(100%, 58vh); margin: 0 auto; }
-  #tabuleiro {
-    display: grid; grid-template-columns: repeat(8, 1fr); width: 100%; aspect-ratio: 1;
+  .tab-wrap { width: 100%; max-width: min(100%, 56vh); margin: 0 auto; display: flex; gap: 6px; }
+  .tabuleiro {
+    position: relative; flex: 1; min-width: 0;
+    display: grid; grid-template-columns: repeat(8, 1fr); aspect-ratio: 1;
     border-radius: 6px; overflow: hidden; box-shadow: 0 8px 28px rgba(0,0,0,.45); touch-action: manipulation; user-select: none;
   }
   .casa { position: relative; aspect-ratio: 1; }
@@ -121,6 +127,21 @@
   .clara .coord { color: var(--escura); }
   .escura .coord { color: var(--clara); }
   .cego .casa img { opacity: 0; }
+  .seta { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 4; }
+  .seta path { fill: var(--seta); }
+
+  /* Selo de classificação do lance */
+  .selo {
+    position: absolute; top: -2%; right: -2%; width: 44%; height: 44%; z-index: 5; border-radius: 50%;
+    display: grid; place-items: center; color: #fff; font: 800 clamp(9px, 2.6vw, 13px)/1 var(--corpo);
+    box-shadow: 0 1px 4px rgba(0,0,0,.45); letter-spacing: -.04em;
+  }
+  .selo-mini { position: static; width: 20px; height: 20px; font-size: 11px; flex: none; box-shadow: none; }
+
+  .nav { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+  .nav button { background: var(--painel); border: 0; border-radius: 10px; height: 40px; display: grid; place-items: center; cursor: pointer; }
+  .nav button:disabled { opacity: .35; cursor: default; }
+  #vendoAviso { text-align: center; color: var(--acento); font-size: .85rem; margin-top: -4px; }
 
   .voz { display: flex; align-items: center; gap: 14px; background: var(--painel); border-radius: 16px; padding: 12px 14px; }
   #mic {
@@ -137,24 +158,49 @@
   #ouvido { color: var(--suave); font-size: .92rem; margin-top: 3px; overflow-wrap: anywhere; min-height: 1.4em; }
   #ouvido.parcial { font-style: italic; }
 
-  #lances { list-style: none; margin: 0; padding: 2px 0; display: flex; gap: 14px; overflow-x: auto; scrollbar-width: none; font-variant-numeric: tabular-nums; white-space: nowrap; font-size: .95rem; min-height: 1.6em; }
-  #lances b { color: var(--suave); font-weight: 500; }
-  #lances li:last-child { color: var(--acento); }
+  .lances { list-style: none; margin: 0; padding: 2px 0; display: flex; gap: 10px; overflow-x: auto; scrollbar-width: none; font-variant-numeric: tabular-nums; white-space: nowrap; font-size: .95rem; min-height: 1.8em; }
+  .lances li { display: flex; align-items: center; gap: 2px; }
+  .lances b { color: var(--suave); font-weight: 500; margin-right: 2px; }
+  .lances button { border: 0; background: transparent; padding: 3px 5px; border-radius: 6px; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
+  .lances button[aria-current="true"] { background: var(--painel-2); color: var(--acento); font-weight: 700; }
 
   .acoes { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
   .acao { background: var(--painel); border: 0; border-radius: 12px; padding: 10px 2px 8px; display: flex; flex-direction: column; align-items: center; gap: 4px; cursor: pointer; font-size: .74rem; color: var(--suave); }
   .acao:disabled { opacity: .4; }
 
-  .folha-fundo { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: flex-end; justify-content: center; z-index: 20; }
-  .folha {
-    width: 100%; max-width: 560px; background: var(--painel); border-radius: 20px 20px 0 0;
-    padding: 22px max(16px, env(safe-area-inset-right)) max(22px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
-    display: flex; flex-direction: column; gap: 12px;
-  }
-  .folha h3 { font: 800 1.8rem/1.05 var(--display); margin: 0; }
-  .folha p { margin: 0; color: var(--suave); }
-  .folha .v { color: var(--vitoria); } .folha .d { color: var(--derrota); }
-  .folha-botoes { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 6px; }
+  /* Análise */
+  .barra-aval { width: 14px; flex: none; border-radius: 4px; overflow: hidden; background: #3b3f38; position: relative; }
+  .barra-aval div { position: absolute; left: 0; right: 0; bottom: 0; background: #f2f0ea; transition: height .3s ease; }
+  .barra-aval.virada div { top: 0; bottom: auto; }
+  .progresso { display: flex; flex-direction: column; gap: 8px; }
+  .progresso-trilho { height: 8px; background: var(--painel-2); border-radius: 99px; overflow: hidden; }
+  .progresso-trilho div { height: 100%; width: 0; background: var(--acento); transition: width .25s; }
+  .placar-precisao { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; text-align: center; }
+  .placar-precisao div { background: var(--painel-2); border-radius: 10px; padding: 10px 6px; }
+  .placar-precisao strong { display: block; font: 800 1.9rem/1.05 var(--display); font-variant-numeric: tabular-nums; }
+  .placar-precisao span { color: var(--suave); font-size: .82rem; }
+  .tabela-classes { width: 100%; border-collapse: collapse; font-size: .92rem; font-variant-numeric: tabular-nums; margin-top: 10px; }
+  .tabela-classes td { padding: 5px 4px; }
+  .tabela-classes td:first-child, .tabela-classes td:last-child { width: 3em; text-align: center; font-weight: 700; }
+  .tabela-classes .nome { display: flex; align-items: center; gap: 8px; }
+  .tabela-classes tr.zero td:not(.nome-cel) { color: var(--linha); }
+  .comentario { display: flex; gap: 10px; align-items: flex-start; background: var(--painel); border-radius: 14px; padding: 12px 14px; min-height: 64px; }
+  .comentario .selo-mini { width: 28px; height: 28px; font-size: 13px; margin-top: 1px; }
+  .comentario-texto { flex: 1; min-width: 0; }
+  .comentario-texto b { font: 700 1rem/1.25 var(--display); display: block; }
+  .comentario-texto span { color: var(--suave); font-size: .9rem; }
+  .aval-num { font: 700 .9rem/1 var(--corpo); font-variant-numeric: tabular-nums; background: var(--painel-2); border-radius: 6px; padding: 5px 7px; flex: none; }
+  #grafico { width: 100%; height: 72px; display: block; border-radius: 8px; background: #3b3f38; cursor: pointer; touch-action: manipulation; }
+
+  /* Popup de fim de partida */
+  .modal-fundo { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: flex; align-items: center; justify-content: center; z-index: 20; padding: 20px max(16px, env(safe-area-inset-right)) 20px max(16px, env(safe-area-inset-left)); }
+  .modal { width: 100%; max-width: 380px; background: var(--painel); border-radius: 18px; padding: 22px 18px 18px; display: flex; flex-direction: column; gap: 10px; text-align: center; box-shadow: 0 20px 60px rgba(0,0,0,.5); }
+  .modal img { width: 56px; height: 56px; margin: 0 auto; }
+  .modal h3 { font: 800 1.9rem/1.05 var(--display); margin: 0; }
+  .modal .motivo { margin: 0; font-weight: 600; }
+  .modal p { margin: 0; color: var(--suave); font-size: .92rem; }
+  .modal .v { color: var(--vitoria); } .modal .d { color: var(--derrota); }
+  .modal-botoes { display: grid; gap: 8px; margin-top: 8px; }
 
   :focus-visible { outline: 3px solid var(--acento); outline-offset: 2px; }
   @media (prefers-reduced-motion: reduce) { #mic[aria-pressed="true"]::after { animation: none; } }
@@ -171,6 +217,7 @@
   <div id="avisoNavegador" class="aviso" hidden></div>
 
   <button id="continuar" class="botao-secundario" hidden></button>
+  <button id="analisarUltima" class="botao-secundario" hidden>Analisar a última partida</button>
 
   <section class="bloco" aria-labelledby="tNivel">
     <h2 id="tNivel">Nível do adversário</h2>
@@ -187,7 +234,14 @@
     </div>
   </section>
 
-  <section class="bloco opcoes" aria-label="Voz">
+  <section class="bloco opcoes" aria-labelledby="tVoz">
+    <h2 id="tVoz">Voz</h2>
+    <label class="campo" for="optVoz">Voz do computador
+      <select id="optVoz"></select>
+    </label>
+    <label class="opcao" for="optVel">Velocidade <input type="range" id="optVel" min="0.7" max="1.5" step="0.05"><span class="valor" id="valVel"></span></label>
+    <label class="opcao" for="optTom">Tom <input type="range" id="optTom" min="0.6" max="1.5" step="0.05"><span class="valor" id="valTom"></span></label>
+    <button id="testarVoz" class="botao-secundario">Ouvir exemplo</button>
     <label class="opcao" for="optFalar">Falar os lances do computador <input type="checkbox" id="optFalar"></label>
     <label class="opcao" for="optOuvir">Ouvir sozinho na minha vez <input type="checkbox" id="optOuvir"></label>
     <label class="opcao" for="optEco">Repetir em voz alta o lance que eu falei <input type="checkbox" id="optEco"></label>
@@ -203,7 +257,7 @@
       <li><q>bispo de c4 captura f7</q></li>
       <li><q>roque pequeno</q> <span>ou “roque grande”</span></li>
       <li><q>e8 promove a rainha</q></li>
-      <li><q>repetir</q> <span>· </span><q>posição</q> <span>· </span><q>dica</q> <span>· </span><q>desfazer</q></li>
+      <li><q>repetir</q> <q>posição</q> <q>dica</q> <q>desfazer</q></li>
     </ul>
   </section>
 
@@ -224,7 +278,15 @@
     </button>
   </div>
 
-  <div class="tab-wrap"><div id="tabuleiro" role="grid" aria-label="Tabuleiro"></div></div>
+  <div class="tab-wrap"><div id="tabuleiro" class="tabuleiro" aria-label="Tabuleiro"></div></div>
+
+  <div class="nav" id="navJogo">
+    <button data-ir="inicio" aria-label="Primeiro lance"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 18l-6-6 6-6M7 6v12"/></svg></button>
+    <button data-ir="anterior" aria-label="Lance anterior"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg></button>
+    <button data-ir="proximo" aria-label="Próximo lance"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg></button>
+    <button data-ir="fim" aria-label="Posição atual"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18l6-6-6-6M17 6v12"/></svg></button>
+  </div>
+  <div id="vendoAviso" hidden></div>
 
   <div class="voz">
     <button id="mic" aria-pressed="false" aria-label="Falar lance">
@@ -236,7 +298,7 @@
     </div>
   </div>
 
-  <ol id="lances" aria-label="Lances da partida"></ol>
+  <ol id="lances" class="lances" aria-label="Lances da partida"></ol>
 
   <div class="acoes">
     <button class="acao" id="aRepetir"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/></svg>Repetir</button>
@@ -247,11 +309,62 @@
   </div>
 </main>
 
-<div id="folha" class="folha-fundo" hidden>
-  <div class="folha" role="dialog" aria-modal="true" aria-labelledby="folhaTitulo">
-    <h3 id="folhaTitulo"></h3>
-    <p id="folhaTexto"></p>
-    <div class="folha-botoes" id="folhaBotoes"></div>
+<main id="analise" class="tela" hidden>
+  <div class="topo">
+    <button class="icone" id="sairAnalise" aria-label="Voltar ao início">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+    </button>
+    <div class="oponente">
+      <b>Análise da partida</b>
+      <span id="anInfo"></span>
+    </div>
+    <button class="icone" id="anFalar" aria-label="Ler comentário em voz alta">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/></svg>
+    </button>
+  </div>
+
+  <div class="tab-wrap">
+    <div class="barra-aval" id="barraAval"><div></div></div>
+    <div id="anTabuleiro" class="tabuleiro" aria-label="Tabuleiro da análise"></div>
+  </div>
+
+  <div class="comentario" aria-live="polite">
+    <span class="selo selo-mini" id="anSelo" hidden></span>
+    <div class="comentario-texto"><b id="anTitulo">Posição inicial</b><span id="anDetalhe"></span></div>
+    <span class="aval-num" id="anAval" hidden></span>
+  </div>
+
+  <div class="nav" id="navAnalise">
+    <button data-ir="inicio" aria-label="Primeiro lance"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 18l-6-6 6-6M7 6v12"/></svg></button>
+    <button data-ir="anterior" aria-label="Lance anterior"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg></button>
+    <button data-ir="proximo" aria-label="Próximo lance"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg></button>
+    <button data-ir="fim" aria-label="Último lance"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18l6-6-6-6M17 6v12"/></svg></button>
+  </div>
+
+  <ol id="anLances" class="lances" aria-label="Lances analisados"></ol>
+
+  <svg id="grafico" viewBox="0 0 300 72" preserveAspectRatio="none" aria-label="Gráfico de avaliação"></svg>
+
+  <section class="bloco">
+    <div class="progresso" id="anProgresso">
+      <span id="anProgressoTexto">Preparando a análise…</span>
+      <div class="progresso-trilho"><div id="anProgressoBarra"></div></div>
+    </div>
+    <div class="placar-precisao" id="anPrecisao" hidden>
+      <div><strong id="precVoce">–</strong><span>Sua precisão</span></div>
+      <div><strong id="precPc">–</strong><span id="precPcNome">Computador</span></div>
+    </div>
+    <table class="tabela-classes" id="anTabela"></table>
+  </section>
+</main>
+
+<div id="modal" class="modal-fundo" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitulo">
+    <img id="modalImg" src="pieces/wK.svg" alt="">
+    <h3 id="modalTitulo"></h3>
+    <p class="motivo" id="modalMotivo"></p>
+    <p id="modalTexto"></p>
+    <div class="modal-botoes" id="modalBotoes"></div>
   </div>
 </div>
 
