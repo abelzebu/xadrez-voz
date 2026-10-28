@@ -72,7 +72,7 @@ const salvarConfig = () => store.set('config', config);
 // Vozes gravadas no ElevenLabs (uma pasta de trechos por voz). A Lax vira a padrão uma única vez, depois respeita a escolha
 const VOZES_GRAVADAS = {
   __lax__: { nome: 'Lax Whisper', pasta: 'audio' },
-  __carla__: { nome: 'Carla', pasta: 'carla' },
+  __roberta__: { nome: 'Roberta', pasta: 'roberta' },
 };
 const VOZ_GRAVADA = '__lax__';
 if (!config.vozLax) { config.voz = VOZ_GRAVADA; config.vozLax = true; salvarConfig(); }
