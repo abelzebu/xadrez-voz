@@ -69,7 +69,11 @@ const store = {
 
 const config = Object.assign({ elo: 800, cor: 'w', falar: true, ouvirAuto: true, eco: true, voz: '', vel: 1.02, tom: 1 }, store.get('config', {}));
 const salvarConfig = () => store.set('config', config);
-// Voz gravada no ElevenLabs (vozes/audio): vira a padrão uma única vez, depois respeita a escolha
+// Vozes gravadas no ElevenLabs (uma pasta de trechos por voz). A Lax vira a padrão uma única vez, depois respeita a escolha
+const VOZES_GRAVADAS = {
+  __lax__: { nome: 'Lax Whisper', pasta: 'audio' },
+  __carla__: { nome: 'Carla', pasta: 'carla' },
+};
 const VOZ_GRAVADA = '__lax__';
 if (!config.vozLax) { config.voz = VOZ_GRAVADA; config.vozLax = true; salvarConfig(); }
 
@@ -151,7 +155,7 @@ function carregarAudio(url) {
 }
 
 const clipes = {
-  carregar: id => carregarAudio(`vozes/audio/${id}.mp3`),
+  carregar: id => carregarAudio(`vozes/${VOZES_GRAVADAS[config.voz].pasta}/${id}.mp3`),
   async preCarregar() {
     try {
       const lista = await (await fetch('vozes/clips.json')).json();
@@ -163,7 +167,7 @@ const clipes = {
 const fala = {
   voz: null, fila: Promise.resolve(), pendentes: 0, geracao: 0, fontes: [],
   get falando() { return this.pendentes > 0; },
-  get gravada() { return config.voz === VOZ_GRAVADA; },
+  get gravada() { return config.voz in VOZES_GRAVADAS; },
   vozes() { return 'speechSynthesis' in window ? speechSynthesis.getVoices() : []; },
   escolherVoz() {
     const vozes = this.vozes();
@@ -1249,9 +1253,10 @@ function preencherVozes() {
   const todas = fala.vozes();
   const pt = todas.filter(v => /^pt/i.test(v.lang || ''));
   const lista = pt.length ? pt : todas;
-  sel.innerHTML = `<option value="${VOZ_GRAVADA}">Lax Whisper (gravada)</option><option value="">Voz do celular: automática</option>`
+  sel.innerHTML = Object.entries(VOZES_GRAVADAS).map(([id, v]) => `<option value="${id}">${v.nome} (gravada)</option>`).join('')
+    + `<option value="">Voz do celular: automática</option>`
     + lista.map(v => `<option value="${esc(v.name)}">${esc(v.name)}${v.lang ? ' · ' + esc(v.lang) : ''}</option>`).join('');
-  sel.value = config.voz === VOZ_GRAVADA || lista.some(v => v.name === config.voz) ? config.voz : '';
+  sel.value = fala.gravada || lista.some(v => v.name === config.voz) ? config.voz : '';
   // Velocidade e tom só mudam as vozes do celular
   $('#optVel').closest('label').hidden = fala.gravada;
   $('#optTom').closest('label').hidden = fala.gravada;
