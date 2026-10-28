@@ -540,7 +540,7 @@ async function finalizar({ r, motivo }) {
   store.del('partida');
   store.set('ultima', { sans: game.history(), cor: minhaCor, elo: nivel.elo, r, motivo });
   atualizarStatus();
-  setTimeout(() => tocarSom('fim'), 350);
+  setTimeout(() => tocarSom({ v: 'vitoria', d: 'derrota', e: 'empate' }[r]), 350);
 
   const titulo = { v: 'Você venceu!', e: 'Empate', d: 'Você perdeu' }[r];
   const porque = MOTIVO[motivo] || '';
@@ -550,11 +550,25 @@ async function finalizar({ r, motivo }) {
   if (proximo && jogos >= 3 && (s.v + s.e / 2) / jogos >= 0.6) texto += ` Que tal tentar o nível ${proximo.elo}?`;
 
   const rei = r === 'e' ? 'wK' : (r === 'v') === (minhaCor === 'w') ? 'wK' : 'bK';
-  abrirModal({ titulo, motivo: porque, texto, tipo: r, img: `pieces/${rei}.svg`, botoes: [
+  const botoes = [
     { rotulo: 'Jogar novamente', principal: true, acao: () => { fecharModal(); comecar(false); } },
     { rotulo: 'Analisar partida', acao: () => { fecharModal(); abrirAnalise(store.get('ultima', null)); } },
     { rotulo: 'Escolher nível', acao: () => { fecharModal(); irParaInicio(); } },
-  ] });
+  ];
+  // Fechando o popup, a partida fica na tela com esta barra no lugar do microfone
+  const tituloBarra = $('#barraFimTitulo');
+  tituloBarra.textContent = `${titulo.replace('!', '')} ${porque}`;
+  tituloBarra.className = r;
+  $('#barraFimBotoes').replaceChildren(...botoes.map(b => {
+    const el = document.createElement('button');
+    el.className = b.principal ? 'botao-principal' : 'botao-secundario';
+    el.textContent = b.rotulo;
+    el.addEventListener('click', b.acao);
+    return el;
+  }));
+  $('.voz').hidden = true;
+  $('#barraFim').hidden = false;
+  abrirModal({ titulo, motivo: porque, texto, tipo: r, img: `pieces/${rei}.svg`, fechavel: true, botoes });
   await fala.dizer(F(`${titulo.replace('!', '')} ${porque}.`, [`fim_${r}`, MOTIVO_ID[motivo]]), true);
 }
 
@@ -624,7 +638,9 @@ async function comecar(continuar) {
   analise.id++;
   try { ctxAudio().resume(); } catch {}
   if (fala.gravada) clipes.preCarregar();
-  for (const s of ['mover', 'capturar', 'xeque', 'fim']) carregarAudio(`sons/${s}.mp3`);
+  for (const s of ['mover', 'capturar', 'xeque', 'vitoria', 'derrota', 'empate']) carregarAudio(`sons/${s}.mp3`);
+  $('#barraFim').hidden = true;
+  $('.voz').hidden = false;
   const salva = continuar ? store.get('partida', null) : null;
   game = new Chess();
   if (salva && game.load_pgn(salva.pgn)) {
@@ -1127,7 +1143,7 @@ async function tocarSom(nome) {
   const ctx = ctxAudio();
   if (ctx.state === 'suspended') { try { await ctx.resume(); } catch {} }
   const b = await carregarAudio(`sons/${nome}.mp3`);
-  if (!b) { if (nome !== 'fim') tocar(nome === 'capturar'); return; }
+  if (!b) { if (['mover', 'capturar', 'xeque'].includes(nome)) tocar(nome === 'capturar'); return; }
   const s = ctx.createBufferSource();
   s.buffer = b;
   s.connect(ctx.destination);
@@ -1193,7 +1209,9 @@ function atualizarLances() {
   atualizarNav($('#navJogo'), vendo == null ? h.length : vendo, h.length);
 }
 
-function abrirModal({ titulo, motivo, texto, tipo, img, botoes }) {
+function abrirModal({ titulo, motivo, texto, tipo, img, botoes, fechavel = false }) {
+  $('#modalFechar').hidden = !fechavel;
+  $('#modal').dataset.fechavel = fechavel ? '1' : '';
   const t = $('#modalTitulo');
   t.textContent = titulo;
   t.className = tipo || '';
@@ -1211,6 +1229,10 @@ function abrirModal({ titulo, motivo, texto, tipo, img, botoes }) {
   $('#modal').hidden = false;
 }
 function fecharModal() { $('#modal').hidden = true; }
+$('#modalFechar').addEventListener('click', fecharModal);
+// Tocar fora do popup ou apertar Esc também fecha, quando ele pode ser fechado
+$('#modal').addEventListener('click', e => { if (e.target === e.currentTarget && e.currentTarget.dataset.fechavel) fecharModal(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#modal').hidden && $('#modal').dataset.fechavel) fecharModal(); });
 
 async function manterTelaLigada() {
   try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch {}
@@ -1317,7 +1339,7 @@ $('#aPosicao').addEventListener('click', () => comando('posicao'));
 $('#aDica').addEventListener('click', dica);
 $('#aDesfazer').addEventListener('click', desfazer);
 $('#aDesistir').addEventListener('click', () => {
-  abrirModal({ titulo: 'Desistir?', motivo: '', texto: 'A partida conta como derrota neste nível.', tipo: 'd', img: `pieces/${minhaCor}K.svg`, botoes: [
+  abrirModal({ titulo: 'Desistir?', motivo: '', texto: 'A partida conta como derrota neste nível.', tipo: 'd', img: `pieces/${minhaCor}K.svg`, fechavel: true, botoes: [
     { rotulo: 'Continuar jogando', principal: true, acao: fecharModal },
     { rotulo: 'Desistir', acao: () => { fecharModal(); finalizar({ r: 'd', motivo: 'Desistência' }); } },
   ] });

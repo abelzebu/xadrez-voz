@@ -207,6 +207,16 @@
   .modal p { margin: 0; color: var(--suave); font-size: .92rem; }
   .modal .v { color: var(--vitoria); } .modal .d { color: var(--derrota); }
   .modal-botoes { display: grid; gap: 8px; margin-top: 8px; }
+  .modal { position: relative; }
+  .modal-fechar { position: absolute; top: 10px; right: 10px; width: 40px; height: 40px; border: 0; border-radius: 50%; background: var(--painel-2); color: var(--suave); display: grid; place-items: center; cursor: pointer; }
+  .modal-fechar svg { width: 20px; height: 20px; }
+
+  .barra-fim { background: var(--painel); border-radius: 16px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+  .barra-fim b { font: 800 1.2rem/1.2 var(--display); text-align: center; }
+  .barra-fim b.v { color: var(--vitoria); } .barra-fim b.d { color: var(--derrota); }
+  .barra-fim-botoes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .barra-fim-botoes .botao-principal { grid-column: 1 / -1; padding: 14px; font-size: 1.05rem; }
+  .barra-fim-botoes .botao-secundario { padding: 12px 8px; }
 
   :focus-visible { outline: 3px solid var(--acento); outline-offset: 2px; }
   @media (prefers-reduced-motion: reduce) { #mic[aria-pressed="true"]::after { animation: none; } }
@@ -294,6 +304,11 @@
   </div>
   <div id="vendoAviso" hidden></div>
 
+  <div class="barra-fim" id="barraFim" hidden>
+    <b id="barraFimTitulo"></b>
+    <div class="barra-fim-botoes" id="barraFimBotoes"></div>
+  </div>
+
   <div class="voz">
     <button id="mic" aria-pressed="false" aria-label="Falar lance">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v4"/></svg>
@@ -367,6 +382,9 @@
 
 <div id="modal" class="modal-fundo" hidden>
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitulo">
+    <button class="modal-fechar" id="modalFechar" aria-label="Fechar e ver o tabuleiro" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
     <img id="modalImg" src="pieces/wK.svg" alt="">
     <h3 id="modalTitulo"></h3>
     <p class="motivo" id="modalMotivo"></p>
