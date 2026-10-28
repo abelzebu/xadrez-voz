@@ -624,6 +624,7 @@ async function comecar(continuar) {
   analise.id++;
   try { ctxAudio().resume(); } catch {}
   if (fala.gravada) clipes.preCarregar();
+  for (const s of ['mover', 'capturar', 'xeque', 'fim']) carregarAudio(`sons/${s}.mp3`);
   const salva = continuar ? store.get('partida', null) : null;
   game = new Chess();
   if (salva && game.load_pgn(salva.pgn)) {
