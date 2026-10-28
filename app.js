@@ -72,12 +72,12 @@ const salvarConfig = () => store.set('config', config);
 // Vozes gravadas no ElevenLabs (uma pasta de trechos por voz). A Lax vira a padrão uma única vez, depois respeita a escolha
 const VOZES_GRAVADAS = {
   __lax__: { nome: 'Lax Whisper', pasta: 'audio' },
-  __roberta__: { nome: 'Roberta', pasta: 'roberta' },
+  __fabio__: { nome: 'Fabio', pasta: 'fabio' },
 };
 const VOZ_GRAVADA = '__lax__';
 if (!config.vozLax) { config.voz = VOZ_GRAVADA; config.vozLax = true; salvarConfig(); }
-// A Carla saiu e quem estava com ela passa para a Roberta
-if (config.voz === '__carla__') { config.voz = '__roberta__'; salvarConfig(); }
+// Carla e Roberta saíram e quem estava com elas passa para o Fabio
+if (config.voz === '__carla__' || config.voz === '__roberta__') { config.voz = '__fabio__'; salvarConfig(); }
 
 let game = null, minhaCor = 'w', nivel = NIVEIS[2];
 let pensando = false, fimDeJogo = false, emJogo = false, buscaId = 0;
