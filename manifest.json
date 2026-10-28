@@ -1,6 +1,6 @@
 {
-  "name": "Xadrez por Voz",
-  "short_name": "Xadrez Voz",
+  "name": "Chesszebu",
+  "short_name": "Chesszebu",
   "start_url": "./",
   "display": "standalone",
   "orientation": "portrait",
