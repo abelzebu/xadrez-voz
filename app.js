@@ -139,17 +139,19 @@ const PAUSA_LONGA = /^(voce|computador|dica|qual_peca|brancas|pretas|xeque|xeque
 let audioCtx = null;
 const ctxAudio = () => (audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)());
 
+const cacheAudio = new Map();
+function carregarAudio(url) {
+  if (!cacheAudio.has(url)) {
+    cacheAudio.set(url, fetch(url)
+      .then(r => (r.ok ? r.arrayBuffer() : Promise.reject(r.status)))
+      .then(b => ctxAudio().decodeAudioData(b))
+      .catch(() => { cacheAudio.delete(url); return null; }));
+  }
+  return cacheAudio.get(url);
+}
+
 const clipes = {
-  cache: new Map(),
-  carregar(id) {
-    if (!this.cache.has(id)) {
-      this.cache.set(id, fetch(`vozes/audio/${id}.mp3`)
-        .then(r => (r.ok ? r.arrayBuffer() : Promise.reject(r.status)))
-        .then(b => ctxAudio().decodeAudioData(b))
-        .catch(() => { this.cache.delete(id); return null; }));
-    }
-    return this.cache.get(id);
-  },
+  carregar: id => carregarAudio(`vozes/audio/${id}.mp3`),
   async preCarregar() {
     try {
       const lista = await (await fetch('vozes/clips.json')).json();
@@ -472,7 +474,7 @@ async function jogarMeuLance(m, porVoz) {
   const feito = game.move(m.san);
   if (!feito) return;
   selecionada = null; dicaCasas = null; confirmarDesistencia = false; vendo = null;
-  desenharJogo(feito); tocar(feito.captured); atualizarLances(); salvarPartida();
+  desenharJogo(feito); tocarLance(feito); atualizarLances(); salvarPartida();
   const res = resultado();
   const eco = config.eco && porVoz ? fala.dizer(F('Você: ' + textoDoLance(feito), ['voce', ...clipesLance(feito)])) : null;
   if (res) { await eco; return finalizar(res); }
@@ -486,7 +488,8 @@ async function vezDoComputador() {
   let uci = Math.random() < nivel.random ? lanceAleatorio() : await motor.buscar(game.fen(), nivel);
   if (id !== buscaId || !emJogo) return;
   if (!uci || uci === '(none)') uci = lanceAleatorio();
-  const espera = 700 + Math.random() * 600 - (performance.now() - inicio);
+  // O computador sempre leva 1,5 s para responder, dá tempo de mexer a peça no tabuleiro
+  const espera = 1500 - (performance.now() - inicio);
   if (espera > 0) await sleep(espera);
   if (id !== buscaId || !emJogo) return;
 
@@ -494,7 +497,7 @@ async function vezDoComputador() {
   pensando = false;
   if (!feito) { atualizarStatus(); return; }
   dicaCasas = null; vendo = null;
-  desenharJogo(feito); tocar(feito.captured); atualizarLances(); salvarPartida();
+  desenharJogo(feito); tocarLance(feito); atualizarLances(); salvarPartida();
   ultimaFala = fraseLance(feito);
   avisar(textoDoLance(feito, casaEscrita));
   const res = resultado();
@@ -537,6 +540,7 @@ async function finalizar({ r, motivo }) {
   store.del('partida');
   store.set('ultima', { sans: game.history(), cor: minhaCor, elo: nivel.elo, r, motivo });
   atualizarStatus();
+  setTimeout(() => tocarSom('fim'), 350);
 
   const titulo = { v: 'Você venceu!', e: 'Empate', d: 'Você perdeu' }[r];
   const porque = MOTIVO[motivo] || '';
@@ -790,6 +794,7 @@ function irParaJogo(destino) {
   vendo = alvo >= n ? null : alvo;
   const lances = game.history({ verbose: true });
   desenharJogo(alvo === atual + 1 ? lances[alvo - 1] : null);
+  if (alvo === atual + 1) tocarLance(lances[alvo - 1]);
 }
 
 function atualizarNav(nav, k, n) {
@@ -1015,6 +1020,7 @@ function desenharAnalise() {
   ol.innerHTML = html;
   marcarLanceAtual(ol, k);
   atualizarNav($('#navAnalise'), k, lances.length);
+  $('#navAnalise [data-ir="destaque"]').disabled = proximoDestaque() == null;
   desenharGrafico();
   desenharResumo();
 }
@@ -1044,24 +1050,49 @@ function desenharResumo() {
   let html = '<tr><td>Você</td><td></td><td>PC</td></tr>';
   for (const [k, info] of Object.entries(CLASSES)) {
     const a = conta[cor][k] || 0, b = conta[outra][k] || 0;
-    html += `<tr class="${a || b ? '' : 'zero'}"><td style="color:${a ? info.cor : ''}">${a}</td>`
+    const atual = analise.classes[analise.indice - 1];
+    const marcada = atual && atual.k === k ? ' atual' : '';
+    html += (a || b
+      ? `<tr data-classe="${k}" class="clicavel${marcada}" title="Ver os lances: ${info.nome}">`
+      : '<tr class="zero">')
+      + `<td style="color:${a ? info.cor : ''}">${a}</td>`
       + `<td class="nome-cel"><span class="nome"><span class="selo selo-mini" style="background:${info.cor}">${info.simbolo}</span>${info.nome}</span></td>`
       + `<td style="color:${b ? info.cor : ''}">${b}</td></tr>`;
   }
   $('#anTabela').innerHTML = html;
 }
 
+// Lances que merecem atenção na revisão (a seta "próximo destaque" e os toques na tabela pulam para eles)
+const DESTAQUES = ['brilhante', 'otimo', 'imprecisao', 'erro', 'perdida', 'capivarada'];
+
+function proximoDestaque() {
+  const i = analise.classes.findIndex((c, j) => j >= analise.indice && c && DESTAQUES.includes(c.k));
+  return i < 0 ? null : i + 1;
+}
+
 function irParaAnalise(destino) {
   const n = analise.lances.length, atual = analise.indice;
-  const k = { inicio: 0, anterior: atual - 1, proximo: atual + 1, fim: n }[destino] ?? +destino;
+  const k = { inicio: 0, anterior: atual - 1, proximo: atual + 1, fim: n, destaque: proximoDestaque() ?? atual }[destino] ?? +destino;
   const alvo = Math.max(0, Math.min(n, k));
   if (alvo === atual) return;
   analise.indice = alvo;
   desenharAnalise();
   if (alvo === atual + 1) animar($('#anTabuleiro'), analise.lances[alvo - 1], analise.cor === 'b');
+  if (alvo > 0 && alvo !== atual - 1) tocarLance(analise.lances[alvo - 1]);
+}
+
+// Toque numa linha da tabela: vai ao primeiro lance daquele tipo; tocando de novo, ao seguinte
+function irParaClasse(k) {
+  const lista = [];
+  analise.classes.forEach((c, i) => { if (c && c.k === k) lista.push(i + 1); });
+  if (!lista.length) return;
+  const alvo = lista.find(i => i > analise.indice) ?? lista[0];
+  irParaAnalise(String(alvo));
+  $('#anTabuleiro').scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'center' });
 }
 
 $('#navAnalise').addEventListener('click', e => { const b = e.target.closest('[data-ir]'); if (b) irParaAnalise(b.dataset.ir); });
+$('#anTabela').addEventListener('click', e => { const tr = e.target.closest('tr[data-classe]'); if (tr) irParaClasse(tr.dataset.classe); });
 $('#anLances').addEventListener('click', e => { const b = e.target.closest('[data-k]'); if (b) irParaAnalise(b.dataset.k); });
 $('#grafico').addEventListener('click', e => {
   const r = e.currentTarget.getBoundingClientRect();
@@ -1089,6 +1120,19 @@ document.addEventListener('keydown', e => {
 });
 
 // ---------- Som ----------
+
+// Efeitos gravados em sons/*.mp3; sem o arquivo, cai no "toc" sintetizado
+async function tocarSom(nome) {
+  const ctx = ctxAudio();
+  if (ctx.state === 'suspended') { try { await ctx.resume(); } catch {} }
+  const b = await carregarAudio(`sons/${nome}.mp3`);
+  if (!b) { if (nome !== 'fim') tocar(nome === 'capturar'); return; }
+  const s = ctx.createBufferSource();
+  s.buffer = b;
+  s.connect(ctx.destination);
+  s.start();
+}
+const tocarLance = m => tocarSom(/[+#]/.test(m.san) ? 'xeque' : m.captured ? 'capturar' : 'mover');
 
 function tocar(captura) {
   try {

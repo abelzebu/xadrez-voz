@@ -141,6 +141,12 @@
   .nav { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
   .nav button { background: var(--painel); border: 0; border-radius: 10px; height: 40px; display: grid; place-items: center; cursor: pointer; }
   .nav button:disabled { opacity: .35; cursor: default; }
+  #navAnalise { grid-template-columns: repeat(4, 1fr) 1.3fr; }
+  .nav button.destaque { background: var(--acento); color: var(--acento-texto); }
+  .tabela-classes tr.clicavel { cursor: pointer; }
+  .tabela-classes tr.clicavel:active td, .tabela-classes tr.atual td { background: var(--painel-2); }
+  .tabela-classes tr.atual td:first-child { border-radius: 8px 0 0 8px; }
+  .tabela-classes tr.atual td:last-child { border-radius: 0 8px 8px 0; }
   #vendoAviso { text-align: center; color: var(--acento); font-size: .85rem; margin-top: -4px; }
 
   .voz { display: flex; align-items: center; gap: 14px; background: var(--painel); border-radius: 16px; padding: 12px 14px; }
@@ -339,6 +345,7 @@
     <button data-ir="anterior" aria-label="Lance anterior"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg></button>
     <button data-ir="proximo" aria-label="Próximo lance"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg></button>
     <button data-ir="fim" aria-label="Último lance"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18l6-6-6-6M17 6v12"/></svg></button>
+    <button data-ir="destaque" class="destaque" aria-label="Próximo lance em destaque" title="Próximo erro, capivarada, brilhante…"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 18l6-6-6-6"/><path d="M16 5v9"/><path d="M16 19h.01"/></svg></button>
   </div>
 
   <ol id="anLances" class="lances" aria-label="Lances analisados"></ol>
