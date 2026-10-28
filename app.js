@@ -69,6 +69,9 @@ const store = {
 
 const config = Object.assign({ elo: 800, cor: 'w', falar: true, ouvirAuto: true, eco: true, voz: '', vel: 1.02, tom: 1 }, store.get('config', {}));
 const salvarConfig = () => store.set('config', config);
+// Voz gravada no ElevenLabs (vozes/audio): vira a padrão uma única vez, depois respeita a escolha
+const VOZ_GRAVADA = '__lax__';
+if (!config.vozLax) { config.voz = VOZ_GRAVADA; config.vozLax = true; salvarConfig(); }
 
 let game = null, minhaCor = 'w', nivel = NIVEIS[2];
 let pensando = false, fimDeJogo = false, emJogo = false, buscaId = 0;
@@ -128,9 +131,37 @@ const motor = {
 
 // ---------- Voz: falar ----------
 
+// Uma fala tem o texto (voz do celular) e, quando dá, a sequência de trechos gravados
+const F = (texto, clipes = null) => ({ texto, clipes });
+// Pausa depois de cada trecho gravado: maior depois de rótulos como "Você:" e frases completas
+const PAUSA_LONGA = /^(voce|computador|dica|qual_peca|brancas|pretas|xeque|xeque_mate|cl_|det_|joga_|nivel_|continuando|meu_ultimo|fim_)/;
+
+let audioCtx = null;
+const ctxAudio = () => (audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)());
+
+const clipes = {
+  cache: new Map(),
+  carregar(id) {
+    if (!this.cache.has(id)) {
+      this.cache.set(id, fetch(`vozes/audio/${id}.mp3`)
+        .then(r => (r.ok ? r.arrayBuffer() : Promise.reject(r.status)))
+        .then(b => ctxAudio().decodeAudioData(b))
+        .catch(() => { this.cache.delete(id); return null; }));
+    }
+    return this.cache.get(id);
+  },
+  async preCarregar() {
+    try {
+      const lista = await (await fetch('vozes/clips.json')).json();
+      for (const id of Object.keys(lista)) this.carregar(id);
+    } catch {}
+  },
+};
+
 const fala = {
-  voz: null, fila: Promise.resolve(), pendentes: 0,
+  voz: null, fila: Promise.resolve(), pendentes: 0, geracao: 0, fontes: [],
   get falando() { return this.pendentes > 0; },
+  get gravada() { return config.voz === VOZ_GRAVADA; },
   vozes() { return 'speechSynthesis' in window ? speechSynthesis.getVoices() : []; },
   escolherVoz() {
     const vozes = this.vozes();
@@ -138,16 +169,44 @@ const fala = {
     this.voz = (config.voz && vozes.find(v => v.name === config.voz))
       || pt.find(v => /google/i.test(v.name)) || pt[0] || vozes.find(v => (v.lang || '').startsWith('pt')) || null;
   },
-  dizer(texto, forcar = false) {
-    if (!('speechSynthesis' in window) || (!config.falar && !forcar) || !texto) return Promise.resolve();
+  dizer(frase, forcar = false) {
+    if (typeof frase === 'string') frase = F(frase);
+    if ((!config.falar && !forcar) || !frase || !frase.texto) return Promise.resolve();
+    const usarClipes = this.gravada && frase.clipes && frase.clipes.length;
+    if (!usarClipes && !('speechSynthesis' in window)) return Promise.resolve();
     ouvinte.parar();
-    // Frases curtas: o Chrome do Android às vezes corta falas longas
-    const partes = texto.split(/(?<=[.;!?])\s+/).filter(Boolean);
+    const geracao = this.geracao;
     this.pendentes++;
     this.fila = this.fila.then(async () => {
-      for (const p of partes) await this.falarUma(p);
+      if (geracao !== this.geracao) return;
+      if (usarClipes && await this.tocarClipes(frase.clipes)) return;
+      if (geracao !== this.geracao || !('speechSynthesis' in window)) return;
+      // Frases curtas: o Chrome do Android às vezes corta falas longas
+      for (const p of frase.texto.split(/(?<=[.;!?])\s+/).filter(Boolean)) {
+        if (geracao !== this.geracao) return;
+        await this.falarUma(p);
+      }
     }).finally(() => { this.pendentes--; });
     return this.fila;
+  },
+  async tocarClipes(ids) {
+    const buffers = await Promise.all(ids.map(id => clipes.carregar(id)));
+    if (buffers.some(b => !b)) return false;
+    const ctx = ctxAudio();
+    if (ctx.state === 'suspended') { try { await ctx.resume(); } catch {} }
+    let t = ctx.currentTime + 0.05;
+    this.fontes = buffers.map((b, i) => {
+      const s = ctx.createBufferSource();
+      s.buffer = b;
+      s.connect(ctx.destination);
+      s.start(t);
+      t += b.duration + (i < ids.length - 1 ? (PAUSA_LONGA.test(ids[i]) ? 0.28 : 0.06) : 0);
+      return s;
+    });
+    const ultima = this.fontes[this.fontes.length - 1];
+    await new Promise(res => { ultima.onended = res; setTimeout(res, (t - ctx.currentTime) * 1000 + 600); });
+    this.fontes = [];
+    return true;
   },
   falarUma(texto) {
     return new Promise(res => {
@@ -163,8 +222,13 @@ const fala = {
       setTimeout(fim, 2500 + texto.length * 110 / config.vel);
     });
   },
-  calar() { if ('speechSynthesis' in window) speechSynthesis.cancel(); },
+  calar() {
+    this.geracao++;
+    for (const s of this.fontes) { try { s.stop(); } catch {} }
+    if ('speechSynthesis' in window) speechSynthesis.cancel();
+  },
 };
+if (fala.gravada) clipes.preCarregar();
 if ('speechSynthesis' in window) {
   fala.escolherVoz();
   speechSynthesis.addEventListener('voiceschanged', () => { fala.escolherVoz(); preencherVozes(); });
@@ -301,16 +365,18 @@ async function executar(r) {
     case 'ambiguo': {
       const quais = juntar(r.opcoes.map(m => `${NOME[m.piece].toLowerCase()} de ${falarCasa(m.from)}`), 'ou');
       avisar('Qual peça? ' + juntar(r.opcoes.map(m => `${NOME[m.piece]} de ${m.from}`), 'ou'));
-      await fala.dizer('Qual peça? O ' + quais + '?', true);
+      const cl = ['qual_peca'];
+      r.opcoes.forEach((m, i) => { if (i) cl.push('ou'); cl.push(`amb_${PECA_ID[m.piece]}`, 'c_' + m.from); });
+      await fala.dizer(F('Qual peça? O ' + quais + '?', r.opcoes.some(m => m.piece === 'k') ? null : cl), true);
       return reouvir();
     }
     case 'ilegal':
       avisar('Esse lance não é possível nesta posição.');
-      await fala.dizer('Esse lance não é possível. Repita, por favor.', true);
+      await fala.dizer(F('Esse lance não é possível. Repita, por favor.', ['ilegal']), true);
       return reouvir();
     default:
       avisar('Não entendi. Ex.: “peão de e2 para e4”.');
-      await fala.dizer('Não entendi. Repita o lance.', true);
+      await fala.dizer(F('Não entendi. Repita o lance.', ['nao_entendi']), true);
       return reouvir();
   }
 }
@@ -341,6 +407,45 @@ function textoDoLance(m, casa = falarCasa) {
   return t;
 }
 
+const PECA_ID = { k: 'rei', q: 'rainha', r: 'torre', b: 'bispo', n: 'cavalo', p: 'peao' };
+const MOTIVO_ID = {
+  'Xeque-mate': 'por_mate', 'Afogamento': 'por_afogamento', 'Repetição de posição': 'por_repeticao',
+  'Material insuficiente': 'por_material', 'Regra dos 50 lances': 'por_50', 'Desistência': 'por_desistencia',
+};
+
+function clipesLance(m) {
+  let c;
+  if (m.flags.includes('k')) c = ['roque_pequeno'];
+  else if (m.flags.includes('q')) c = ['roque_grande'];
+  else {
+    c = [`${PECA_ID[m.piece]}_de`, 'c_' + m.from, m.captured ? `cap_${PECA_ID[m.captured]}` : 'para', 'c_' + m.to];
+    if (m.flags.includes('e')) c.push('en_passant');
+    if (m.promotion) c.push('promove_' + m.promotion);
+  }
+  if (m.san.includes('#')) c.push('xeque_mate');
+  else if (m.san.includes('+')) c.push('xeque');
+  return c;
+}
+const fraseLance = m => F(textoDoLance(m), clipesLance(m));
+
+function clipesPosicao() {
+  const c = [];
+  for (const cor of ['w', 'b']) {
+    c.push(cor === 'w' ? 'brancas' : 'pretas');
+    for (const t of 'kqrbnp') {
+      const cs = [];
+      for (const f of COLUNAS) for (let r = 1; r <= 8; r++) {
+        const p = game.get(f + r);
+        if (p && p.color === cor && p.type === t) cs.push(f + r);
+      }
+      if (!cs.length) continue;
+      c.push(cs.length > 1 && t !== 'k' ? `pos_${t}s` : `pos_${t}`);
+      cs.forEach((sq, i) => { if (i && i === cs.length - 1) c.push('e'); c.push('c_' + sq); });
+    }
+  }
+  return c;
+}
+
 function textoPosicao(casa = falarCasa) {
   const lados = { w: {}, b: {} };
   for (const f of COLUNAS) for (let r = 1; r <= 8; r++) {
@@ -369,7 +474,7 @@ async function jogarMeuLance(m, porVoz) {
   selecionada = null; dicaCasas = null; confirmarDesistencia = false; vendo = null;
   desenharJogo(feito); tocar(feito.captured); atualizarLances(); salvarPartida();
   const res = resultado();
-  const eco = config.eco && porVoz ? fala.dizer('Você: ' + textoDoLance(feito)) : null;
+  const eco = config.eco && porVoz ? fala.dizer(F('Você: ' + textoDoLance(feito), ['voce', ...clipesLance(feito)])) : null;
   if (res) { await eco; return finalizar(res); }
   vezDoComputador();
 }
@@ -390,7 +495,7 @@ async function vezDoComputador() {
   if (!feito) { atualizarStatus(); return; }
   dicaCasas = null; vendo = null;
   desenharJogo(feito); tocar(feito.captured); atualizarLances(); salvarPartida();
-  ultimaFala = textoDoLance(feito);
+  ultimaFala = fraseLance(feito);
   avisar(textoDoLance(feito, casaEscrita));
   const res = resultado();
   atualizarStatus();
@@ -446,31 +551,31 @@ async function finalizar({ r, motivo }) {
     { rotulo: 'Analisar partida', acao: () => { fecharModal(); abrirAnalise(store.get('ultima', null)); } },
     { rotulo: 'Escolher nível', acao: () => { fecharModal(); irParaInicio(); } },
   ] });
-  await fala.dizer(`${titulo.replace('!', '')} ${porque}.`, true);
+  await fala.dizer(F(`${titulo.replace('!', '')} ${porque}.`, [`fim_${r}`, MOTIVO_ID[motivo]]), true);
 }
 
 async function comando(nome) {
   switch (nome) {
     case 'repetir':
       if (ultimaFala) await fala.dizer(ultimaFala, true);
-      else await fala.dizer('Ainda não joguei nesta partida.', true);
+      else await fala.dizer(F('Ainda não joguei nesta partida.', ['ainda_nao']), true);
       return reouvir();
     case 'posicao':
       avisar(textoPosicao(casaEscrita));
-      await fala.dizer(textoPosicao(), true);
+      await fala.dizer(F(textoPosicao(), clipesPosicao()), true);
       return reouvir();
     case 'dica': return dica();
     case 'desfazer': return desfazer();
     case 'desistir':
       confirmarDesistencia = true;
       avisar('Diga “sim” para desistir.');
-      await fala.dizer('Quer mesmo desistir? Diga sim para confirmar.', true);
+      await fala.dizer(F('Quer mesmo desistir? Diga sim para confirmar.', ['desistir']), true);
       return ouvinte.iniciar(true);
     case 'desistirConfirmado':
       confirmarDesistencia = false;
       return finalizar({ r: 'd', motivo: 'Desistência' });
     case 'ajuda':
-      await fala.dizer('Fale a peça, a casa de saída e a casa de chegada. Por exemplo: cavalo de gê 1 para éfe 3. Você também pode dizer repetir, posição, dica ou desfazer.', true);
+      await fala.dizer(F('Fale a peça, a casa de saída e a casa de chegada. Por exemplo: cavalo de gê 1 para éfe 3. Você também pode dizer repetir, posição, dica ou desfazer.', ['ajuda']), true);
       return reouvir();
   }
 }
@@ -486,7 +591,7 @@ async function dica() {
   dicaCasas = [m.from, m.to]; vendo = null;
   desenharJogo();
   avisar('Dica: ' + textoDoLance(m, casaEscrita));
-  await fala.dizer('Dica: ' + textoDoLance(m), true);
+  await fala.dizer(F('Dica: ' + textoDoLance(m), ['dica', ...clipesLance(m)]), true);
   reouvir();
 }
 
@@ -500,10 +605,10 @@ async function desfazer() {
   } else return;
   selecionada = null; dicaCasas = null; vendo = null;
   const ultimo = game.history({ verbose: true }).pop();
-  ultimaFala = ultimo && ultimo.color !== minhaCor ? textoDoLance(ultimo) : '';
+  ultimaFala = ultimo && ultimo.color !== minhaCor ? fraseLance(ultimo) : null;
   desenharJogo(); atualizarLances(); salvarPartida(); atualizarStatus();
   avisar('Lance desfeito. Volte as peças no tabuleiro.');
-  await fala.dizer('Lance desfeito. Volte as peças no tabuleiro. Sua vez.', true);
+  await fala.dizer(F('Lance desfeito. Volte as peças no tabuleiro. Sua vez.', ['desfeito']), true);
   reouvir();
 }
 
@@ -513,6 +618,8 @@ function salvarPartida() {
 
 async function comecar(continuar) {
   analise.id++;
+  try { ctxAudio().resume(); } catch {}
+  if (fala.gravada) clipes.preCarregar();
   const salva = continuar ? store.get('partida', null) : null;
   game = new Chess();
   if (salva && game.load_pgn(salva.pgn)) {
@@ -528,7 +635,7 @@ async function comecar(continuar) {
   emJogo = true; fimDeJogo = false; pensando = false; buscaId++;
   selecionada = null; dicaCasas = null; confirmarDesistencia = false; ouvinte.falhas = 0; vendo = null;
   const ultimo = game.history({ verbose: true }).pop();
-  ultimaFala = ultimo && ultimo.color !== minhaCor ? textoDoLance(ultimo) : '';
+  ultimaFala = ultimo && ultimo.color !== minhaCor ? fraseLance(ultimo) : null;
 
   mostrarTela('jogo');
   $('#nomeOponente').textContent = `Computador ${nivel.elo}`;
@@ -538,9 +645,11 @@ async function comecar(continuar) {
   manterTelaLigada();
   if (!motor.worker) avisar('Não consegui iniciar o motor. O computador vai jogar lances aleatórios.');
 
+  const corTexto = `Você joga de ${minhaCor === 'w' ? 'brancas' : 'pretas'}.`;
   const saudacao = salva
-    ? `Continuando. Você joga de ${minhaCor === 'w' ? 'brancas' : 'pretas'}.` + (ultimaFala ? ` Meu último lance foi: ${ultimaFala}` : '')
-    : `Nível ${nivel.elo}. Você joga de ${minhaCor === 'w' ? 'brancas' : 'pretas'}.`;
+    ? F(`Continuando. ${corTexto}` + (ultimaFala ? ` Meu último lance foi: ${ultimaFala.texto}` : ''),
+      ['continuando', 'joga_' + minhaCor, ...(ultimaFala ? ['meu_ultimo', ...ultimaFala.clipes] : [])])
+    : F(`Nível ${nivel.elo}. ${corTexto}`, ['nivel_' + nivel.elo, 'joga_' + minhaCor]);
   await fala.dizer(saudacao, true);
   if (!emJogo) return;
   if (game.turn() !== minhaCor) vezDoComputador();
@@ -825,7 +934,7 @@ async function abrirAnalise(partida) {
   $('#precVoce').textContent = minha == null ? '–' : minha.toFixed(1).replace('.', ',');
   $('#precPc').textContent = dele == null ? '–' : dele.toFixed(1).replace('.', ',');
   desenharAnalise();
-  if (minha != null) fala.dizer(`Análise pronta. Sua precisão foi de ${Math.round(minha)} por cento.`);
+  if (minha != null) fala.dizer(F(`Análise pronta. Sua precisão foi de ${Math.round(minha)} por cento.`, ['analise_pronta']));
 }
 
 function textoNota(nota) {
@@ -964,8 +1073,10 @@ $('#anFalar').addEventListener('click', () => {
   fala.calar();
   if (!m || !c.classe) { fala.dizer(c.titulo + '. ' + c.detalhe, true); return; }
   const partes = [`${c.quem}: ${textoDoLance(m)}.`, `${CLASSES[c.classe].nome}.`, DETALHE[c.classe] || ''];
-  if (c.melhor) partes.push(`O melhor era ${textoDoLance(c.melhor)}.`);
-  fala.dizer(partes.join(' '), true);
+  const cl = [c.quem === 'Você' ? 'voce' : 'computador', ...clipesLance(m), 'cl_' + c.classe];
+  if (DETALHE[c.classe]) cl.push('det_' + c.classe);
+  if (c.melhor) { partes.push(`O melhor era ${textoDoLance(c.melhor)}.`); cl.push('o_melhor_era', ...clipesLance(c.melhor)); }
+  fala.dizer(F(partes.join(' '), cl), true);
 });
 $('#sairAnalise').addEventListener('click', irParaInicio);
 
@@ -979,10 +1090,9 @@ document.addEventListener('keydown', e => {
 
 // ---------- Som ----------
 
-let audio = null;
 function tocar(captura) {
   try {
-    audio = audio || new (window.AudioContext || window.webkitAudioContext)();
+    const audio = ctxAudio();
     const t = audio.currentTime;
     const o = audio.createOscillator(), g = audio.createGain();
     o.type = 'triangle';
@@ -1072,10 +1182,12 @@ function preencherVozes() {
   const todas = fala.vozes();
   const pt = todas.filter(v => /^pt/i.test(v.lang || ''));
   const lista = pt.length ? pt : todas;
-  sel.innerHTML = '<option value="">Automática</option>'
+  sel.innerHTML = `<option value="${VOZ_GRAVADA}">Lax Whisper (gravada)</option><option value="">Voz do celular: automática</option>`
     + lista.map(v => `<option value="${esc(v.name)}">${esc(v.name)}${v.lang ? ' · ' + esc(v.lang) : ''}</option>`).join('');
-  sel.value = lista.some(v => v.name === config.voz) ? config.voz : '';
-  sel.disabled = !todas.length;
+  sel.value = config.voz === VOZ_GRAVADA || lista.some(v => v.name === config.voz) ? config.voz : '';
+  // Velocidade e tom só mudam as vozes do celular
+  $('#optVel').closest('label').hidden = fala.gravada;
+  $('#optTom').closest('label').hidden = fala.gravada;
 }
 
 function desenharInicio() {
@@ -1123,10 +1235,17 @@ $('#cores').addEventListener('click', e => {
 $('#optFalar').addEventListener('change', e => { config.falar = e.target.checked; salvarConfig(); });
 $('#optOuvir').addEventListener('change', e => { config.ouvirAuto = e.target.checked; salvarConfig(); });
 $('#optEco').addEventListener('change', e => { config.eco = e.target.checked; salvarConfig(); });
-$('#optVoz').addEventListener('change', e => { config.voz = e.target.value; salvarConfig(); fala.escolherVoz(); });
+$('#optVoz').addEventListener('change', e => {
+  config.voz = e.target.value; salvarConfig(); fala.escolherVoz(); preencherVozes();
+  if (fala.gravada) clipes.preCarregar();
+});
 $('#optVel').addEventListener('input', e => { config.vel = +e.target.value; salvarConfig(); $('#valVel').textContent = config.vel.toFixed(2).replace('.', ',') + '×'; });
 $('#optTom').addEventListener('input', e => { config.tom = +e.target.value; salvarConfig(); $('#valTom').textContent = config.tom.toFixed(2).replace('.', ','); });
-$('#testarVoz').addEventListener('click', () => { fala.calar(); fala.dizer('Cavalo de gê 1 para éfe 3. Xeque.', true); });
+$('#testarVoz').addEventListener('click', () => {
+  fala.calar();
+  try { ctxAudio().resume(); } catch {}
+  fala.dizer(F('Cavalo de gê 1 para éfe 3. Xeque.', ['cavalo_de', 'c_g1', 'para', 'c_f3', 'xeque']), true);
+});
 $('#comecar').addEventListener('click', () => comecar(false));
 $('#continuar').addEventListener('click', () => comecar(true));
 $('#analisarUltima').addEventListener('click', () => abrirAnalise(store.get('ultima', null)));
