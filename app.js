@@ -76,6 +76,8 @@ const VOZES_GRAVADAS = {
 };
 const VOZ_GRAVADA = '__lax__';
 if (!config.vozLax) { config.voz = VOZ_GRAVADA; config.vozLax = true; salvarConfig(); }
+// A Carla saiu e quem estava com ela passa para a Roberta
+if (config.voz === '__carla__') { config.voz = '__roberta__'; salvarConfig(); }
 
 let game = null, minhaCor = 'w', nivel = NIVEIS[2];
 let pensando = false, fimDeJogo = false, emJogo = false, buscaId = 0;
